@@ -184,12 +184,16 @@ class MonitorRuns(QMainWindow):
         self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.tree.itemDoubleClicked.connect(self.copy_tar)
         
-        # 设置列宽自动调整
-        self.tree.header().setStretchLastSection(False)
-        self.tree.header().setSectionResizeMode(0, QHeaderView.Fixed)  # level列固定宽度
-        self.tree.header().setSectionResizeMode(2, QHeaderView.Fixed)  # status列固定宽度
-        self.tree.header().setSectionResizeMode(3, QHeaderView.Fixed)  # start time列固定宽度
-        self.tree.header().setSectionResizeMode(4, QHeaderView.Fixed)  # end time列固定宽度
+        # 设置列宽和调整模式
+        header = self.tree.header()
+        header.setStretchLastSection(True)  # 让最后一列填充剩余空间
+        
+        # 设置各列的调整模式
+        header.setSectionResizeMode(0, QHeaderView.Fixed)  # level列固定宽度
+        header.setSectionResizeMode(1, QHeaderView.Interactive)  # target列可手动调整
+        header.setSectionResizeMode(2, QHeaderView.Fixed)  # status列固定宽度
+        header.setSectionResizeMode(3, QHeaderView.Fixed)  # start time列固定宽度
+        header.setSectionResizeMode(4, QHeaderView.Stretch)  # end time列自动填充剩余空间
         
         tab_run_layout.addWidget(self.tree)
 
@@ -494,7 +498,7 @@ class MonitorRuns(QMainWindow):
         l = []
         o = []
         
-        # 用于计算最大target名称宽度
+        # 用于计算最大target名称宽��
         fm = QFontMetrics(self.tree.font())
         max_target_width = 0
         
@@ -536,7 +540,7 @@ class MonitorRuns(QMainWindow):
         # 其他列固定宽度
         self.tree.setColumnWidth(2, 100)  # status列
         self.tree.setColumnWidth(3, 150)  # start time列
-        self.tree.setColumnWidth(4, 150)  # end time列
+        # end time列不需要设置宽度，因为已经设置为自动填充
 
         # 构建树结构
         all_lv = list(set(o))
@@ -652,4 +656,3 @@ if __name__ == "__main__":
     w = MonitorRuns()
     w.show()
     sys.exit(app.exec_())
-
