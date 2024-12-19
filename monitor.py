@@ -27,13 +27,16 @@ class ComboFrame(QWidget):
             w = fm.width(i)
             if w > max_len:
                 max_len = w
-        combo_width = max_len // 4 if max_len > 0 else 10
+
+        # 设置一个合理的最小和最大宽度
+        min_width = 150  # 最小宽度
+        max_width = 300  # 最大宽度
+        combo_width = min(max(min_width, max_len + 40), max_width)  # 添加一些padding，并限制在最小最大值之间
 
         self.combobox = QComboBox()
         self.combobox.addItems(self.new_list)
         self.combobox.setEditable(False)
-        # 宽度可根据需要适当调整
-        self.combobox.setMinimumWidth(combo_width*7)
+        self.combobox.setFixedWidth(combo_width)  # 使用setFixedWidth替代setMinimumWidth
         layout.addWidget(self.combobox)
 
     def get_combo_value(self):
@@ -76,7 +79,8 @@ class MonitorRuns(QMainWindow):
             'scheduled':'deepskyblue',
             'running':'yellow',
             'pending':'orange',
-            'invalid':'skyblue'
+            'invalid':'skyblue',
+            'no_status':'#87CEEB'
         }
 
         # 主部件
@@ -146,7 +150,7 @@ class MonitorRuns(QMainWindow):
         hb2.addWidget(bt_trace_up)
         hb2.addWidget(bt_trace_dn)
 
-        # 将两行按钮添加到按钮布局
+        # 将两行按钮��加到按钮布局
         button_layout.addWidget(button_row1)
         button_layout.addWidget(button_row2)
 
@@ -223,11 +227,22 @@ class MonitorRuns(QMainWindow):
         self.tar_name = []
         self.countX = 0
 
+        # 添加缓存
+        self.target_level_cache = {}
+        self.target_status_cache = {}
+        self.target_time_cache = {}
+        
         self.init_run_view(self.combo_sel_dir)
 
         # 窗口大小与位置初始化
         self.resize(1200,800)
         self.center()
+
+        # 添加延迟搜索
+        self.search_timer = QTimer()
+        self.search_timer.setSingleShot(True)
+        self.search_timer.timeout.connect(self.do_search)
+        self.En_search.textChanged.connect(self.schedule_search)
 
     def center(self):
         qr = self.frameGeometry()
@@ -250,7 +265,10 @@ class MonitorRuns(QMainWindow):
     def change_run(self):
         self.combo_sel = os.path.join(self.gen_combo.cur_dir, self.gen_combo.combobox.currentText())
         try:
+            # 清理缓存并更新所有树视图
+            self.clear_status_cache()
             self.get_tree(self.combo_sel)
+            self.update_all_trees()
         except:
             pass
 
@@ -273,7 +291,6 @@ class MonitorRuns(QMainWindow):
             self.tabwidget.removeTab(index)
 
     def start(self, status):
-        # 与原逻辑一致
         if status == 'XMeta_run all':
             self.bt_notar(status)
         else:
@@ -284,19 +301,33 @@ class MonitorRuns(QMainWindow):
         os.system('XMeta_term')
 
     def bt_event(self, status):
-        selected = self.tree.selectedItems()
+        current_tree = self.get_current_tree()
+        if not current_tree:
+            return
+            
+        selected = current_tree.selectedItems()
         os.chdir(self.combo_sel)
         select_run_targets = " ".join([itm.text(1) for itm in selected if itm.text(1) != ""])
         if select_run_targets.strip():
             os.system('%s %s' %(status, select_run_targets))
-        self.tree.clearSelection()
+            # 清理缓存并更新所有树视图
+            self.clear_status_cache()
+            self.update_all_trees()
+        current_tree.clearSelection()
 
     def bt_notar(self, status):
         os.chdir(self.combo_sel)
         os.system('%s' %status)
+        # 清理缓存并更新所有树视图
+        self.clear_status_cache()
+        self.update_all_trees()
 
     def bt_csh(self):
-        selected = self.tree.selectedItems()
+        current_tree = self.get_current_tree()
+        if not current_tree:
+            return
+            
+        selected = current_tree.selectedItems()
         if not selected:
             return
         tar_sel = selected[0].text(1)
@@ -307,10 +338,14 @@ class MonitorRuns(QMainWindow):
                                'XMeta/%s/actions/%s.csh' %(family_name, tar_sel))
         if os.path.exists(tar_csh):
             os.system('gvim %s' %tar_csh)
-        self.tree.clearSelection()
+        current_tree.clearSelection()
 
     def bt_log(self):
-        selected = self.tree.selectedItems()
+        current_tree = self.get_current_tree()
+        if not current_tree:
+            return
+            
+        selected = current_tree.selectedItems()
         for tar in selected:
             tar_sel = tar.text(1)
             if os.path.exists(self.combo_sel + '/logs/%s.log.gz' %tar_sel):
@@ -319,17 +354,21 @@ class MonitorRuns(QMainWindow):
                 os.system('gvim %s/logs/%s.log' %(self.combo_sel, tar_sel))
             else:
                 print("Error: cannot find log files")
-        self.tree.clearSelection()
+        current_tree.clearSelection()
 
     def bt_cmd(self):
-        selected = self.tree.selectedItems()
+        current_tree = self.get_current_tree()
+        if not current_tree:
+            return
+            
+        selected = current_tree.selectedItems()
         for tar in selected:
             tar_sel = tar.text(1)
             if os.path.exists(self.combo_sel + '/cmds/%s.cmd' %tar_sel):
                 os.system('gvim %s/cmds/%s.cmd' %(self.combo_sel, tar_sel))
             else:
                 os.system('gvim %s/cmds/%s.tcl' %(self.combo_sel, tar_sel))
-        self.tree.clearSelection()
+        current_tree.clearSelection()
 
     def get_filter_target(self):
         pattern = self.En_search.text()
@@ -391,7 +430,11 @@ class MonitorRuns(QMainWindow):
         self.tabwidget.setCurrentIndex(idx)
 
     def retrace_tab(self, inout):
-        selected = self.tree.selectedItems()
+        current_tree = self.get_current_tree()
+        if not current_tree:
+            return
+            
+        selected = current_tree.selectedItems()
         if not selected:
             return
         self.tar_sel = selected[0].text(1)
@@ -446,7 +489,7 @@ class MonitorRuns(QMainWindow):
 
             idx = self.tabwidget.addTab(tab_trace, self.tar_sel)
             self.tabwidget.setCurrentIndex(idx)
-            self.tree.clearSelection()
+            current_tree.clearSelection()
 
     def get_retrace_target(self, inout):
         self.retrace_tar_name = []
@@ -481,7 +524,11 @@ class MonitorRuns(QMainWindow):
         return self.tar_name
 
     def copy_item(self):
-        selected = self.tree.selectedItems()
+        current_tree = self.get_current_tree()
+        if not current_tree:
+            return []
+            
+        selected = current_tree.selectedItems()
         n = [itm.text(1) for itm in selected if itm.text(1) != ""]
         return n
 
@@ -498,7 +545,7 @@ class MonitorRuns(QMainWindow):
         l = []
         o = []
         
-        # 用于计算最大target名称宽��
+        # 用于计算最大target名称宽度
         fm = QFontMetrics(self.tree.font())
         max_target_width = 0
         
@@ -569,26 +616,39 @@ class MonitorRuns(QMainWindow):
         self.restore_tree_state(tree_state)
 
     def set_item_color(self, item, status):
+        """设置项目颜色，如果状态为空则设置淡蓝色背景"""
         if status in self.colors:
             color = QColor(self.colors[status])
-            for col in range(item.columnCount()):
-                item.setBackground(col, QBrush(color))
+        else:
+            # 无状态时使用淡蓝色
+            color = QColor(self.colors['no_status'])
+            
+        for col in range(item.columnCount()):
+            item.setBackground(col, QBrush(color))
 
     def get_target_status(self, target_file):
+        """获取target状态"""
+        # 使用缓存
+        if target_file in self.target_status_cache:
+            return self.target_status_cache[target_file]
+            
+        status = ''
         if os.path.exists(target_file + '.skip'):
-            return 'skip'
+            status = 'skip'
         elif os.path.exists(target_file + '.finish'):
-            return 'finish'
+            status = 'finish'
         elif os.path.exists(target_file + '.failed'):
-            return 'failed'
+            status = 'failed'
         elif os.path.exists(target_file + '.running'):
-            return 'running'
+            status = 'running'
         elif os.path.exists(target_file + '.pending'):
-            return 'pending'
+            status = 'pending'
         elif os.path.exists(target_file + '.scheduled'):
-            return 'scheduled'
-        else:
-            return ''
+            status = 'scheduled'
+        
+        # 更新缓存
+        self.target_status_cache[target_file] = status
+        return status
 
     def get_start_end_time(self, tgt_track_file):
         start_time = ""
@@ -648,6 +708,57 @@ class MonitorRuns(QMainWindow):
         if 'scroll' in state:
             self.tree.verticalScrollBar().setValue(state['scroll'])
 
+    def schedule_search(self):
+        # 延迟300ms执行搜索，避免频繁更新
+        self.search_timer.start(300)
+
+    def do_search(self):
+        """执行搜索操作"""
+        self.filter_tab()
+        
+    # 添加获取当前活动树形视图的方法
+    def get_current_tree(self):
+        """获取当前活动tab中的树形视图"""
+        current_tab = self.tabwidget.currentWidget()
+        if current_tab == self.tab_run:
+            return self.tree
+        else:
+            # 在其他tab中查找QTreeWidget
+            for child in current_tab.children():
+                if isinstance(child, QTreeWidget):
+                    return child
+        return None
+
+    def clear_status_cache(self):
+        """清理状态缓存"""
+        self.target_status_cache.clear()
+
+    def update_all_trees(self):
+        """更新所有tab页面中的树视图状态"""
+        # 更新所有打开的树视图
+        for i in range(self.tabwidget.count()):
+            tab = self.tabwidget.widget(i)
+            tree_widget = None
+            
+            if tab == self.tab_run:
+                tree_widget = self.tree
+            else:
+                # 在其他tab中查找QTreeWidget
+                for child in tab.children():
+                    if isinstance(child, QTreeWidget):
+                        tree_widget = child
+                        break
+            
+            if tree_widget:
+                iterator = QTreeWidgetItemIterator(tree_widget)
+                while iterator.value():
+                    item = iterator.value()
+                    if item.text(1):  # 只更新有target名称的项
+                        target_file = os.path.join(self.combo_sel, 'status', item.text(1))
+                        status = self.get_target_status(target_file)
+                        item.setText(2, status)
+                        self.set_item_color(item, status)
+                    iterator += 1
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
