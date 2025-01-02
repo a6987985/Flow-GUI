@@ -677,20 +677,21 @@ class MonitorRuns(QMainWindow):
         self.context_menu = QMenu(self)
         
         # 添加菜单项
-        action_terminal = self.context_menu.addAction("Terminal")
-        action_csh = self.context_menu.addAction("Shell")
-        action_log = self.context_menu.addAction("Log")
-        action_cmd = self.context_menu.addAction("Command")
-        action_trace_up = self.context_menu.addAction("Trace Up")
-        action_trace_down = self.context_menu.addAction("Trace Down")
+        terminal_action = self.context_menu.addAction("Terminal")
+        csh_action = self.context_menu.addAction("csh")
+        log_action = self.context_menu.addAction("Log")
+        cmd_action = self.context_menu.addAction("cmd")
+        self.context_menu.addSeparator()
+        trace_up_action = self.context_menu.addAction("Trace Up")
+        trace_down_action = self.context_menu.addAction("Trace Down")
         
         # 连接信号到对应的槽函数
-        action_terminal.triggered.connect(lambda: self.bt_terminal(self.tree.currentItem()))
-        action_csh.triggered.connect(lambda: self.bt_csh(self.tree.currentItem()))
-        action_log.triggered.connect(lambda: self.bt_log(self.tree.currentItem()))
-        action_cmd.triggered.connect(lambda: self.bt_cmd(self.tree.currentItem()))
-        action_trace_up.triggered.connect(lambda: self.bt_trace_up(self.tree.currentItem()))
-        action_trace_down.triggered.connect(lambda: self.bt_trace_down(self.tree.currentItem()))
+        terminal_action.triggered.connect(lambda: self.bt_terminal(self.tree.currentItem()))
+        csh_action.triggered.connect(lambda: self.bt_csh(self.tree.currentItem()))
+        log_action.triggered.connect(lambda: self.bt_log(self.tree.currentItem()))
+        cmd_action.triggered.connect(lambda: self.bt_cmd(self.tree.currentItem()))
+        trace_up_action.triggered.connect(lambda: self.bt_trace_up(self.tree.currentItem()))
+        trace_down_action.triggered.connect(lambda: self.bt_trace_down(self.tree.currentItem()))
         
         # 设置树形视图上下文菜单策略
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
