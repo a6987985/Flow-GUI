@@ -5,7 +5,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QTabWidget, QTreeWidget, QTreeWidgetItem,
                              QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton, 
                              QStyleFactory, QMenu, QAction, QFileDialog, QMessageBox, QScrollBar, QTreeWidgetItemIterator,
-                             QHeaderView, QStyle)
+                             QHeaderView, QStyle, QDialog, QTextEdit)
 from PyQt5.QtCore import (Qt, QTimer, QRegExp)
 from PyQt5.QtGui import (QFont, QBrush, QColor, QClipboard, QIcon, QRegExpValidator, QFontMetrics)
 
@@ -67,10 +67,17 @@ class MonitorRuns(QMainWindow):
 
         title_name = "Console of XMeta/%s-%s @ %s" %(version, family, xmeta_project)
         self.setWindowTitle(title_name)
-
-        # 设置主题相关内容
-        self.is_dark_mode = False
-        self.setup_themes()
+        
+        # 定义基本的状态颜色
+        self.colors = {
+            'finish': '#67c23a',
+            'skip': '#e6a23c',
+            'failed': '#f56c6c',
+            'scheduled': '#409eff',
+            'running': '#ffd700',
+            'pending': '#ff9900',
+            'invalid': '#909399'
+        }
         
         # 创建菜单栏
         self.create_menu()
@@ -195,7 +202,6 @@ class MonitorRuns(QMainWindow):
         self.center()
 
         self.create_context_menu()
-        self.setup_theme_button()
 
     def center(self):
         qr = self.frameGeometry()
@@ -698,152 +704,25 @@ class MonitorRuns(QMainWindow):
             if item.childCount() == 0:  # 叶子节点
                 self.context_menu.exec_(self.tree.viewport().mapToGlobal(position))
 
-    def setup_theme_button(self):
-        """设置主题切换按钮"""
-        self.theme_button = QPushButton(self)
-        self.theme_button.setFixedSize(24, 24)
-        self.theme_button.setStyleSheet("""
-            QPushButton {
-                border: none;
-                background-color: transparent;
-            }
-        """)
-        self.update_theme_icon()
-        self.theme_button.clicked.connect(self.toggle_theme)
-
-    def update_theme_icon(self):
-        """更新主题图标"""
-        icon_path = ":/dark_mode.png" if self.is_dark_mode else ":/light_mode.png"
-        self.theme_button.setIcon(QIcon(icon_path))
-
-    def toggle_theme(self):
-        """切换主题"""
-        self.is_dark_mode = not self.is_dark_mode
-        self.change_theme("dark" if self.is_dark_mode else "light")
-        self.update_theme_icon()
-
-    def change_theme(self, theme_name):
-        """切换主题样式"""
-        if theme_name in self.themes:
-            self.current_theme = theme_name
-            self.colors = self.themes[theme_name]['status_colors']
-            self.apply_theme()
-
-    def apply_theme(self):
-        theme = self.themes[self.current_theme]
-        app = QApplication.instance()
-        
-        # 用样式表
-        app.setStyleSheet(f"""
-            QMainWindow, QWidget {{
-                background-color: {theme['background']};
-                color: {theme['text']};
-            }}
-            QPushButton {{
-                background-color: {theme['button']};
-                color: {theme['text']};
-                border: none;
-                padding: 5px 10px;
-                border-radius: 3px;
-            }}
-            QPushButton:hover {{
-                background-color: {theme['button_hover']};
-            }}
-            QLineEdit {{
-                background-color: {theme['input']};
-                color: {theme['text']};
-                border: 1px solid {theme['border']};
-                padding: 3px;
-                border-radius: 3px;
-            }}
-            QTreeWidget {{
-                background-color: {theme['background']};
-                color: {theme['text']};
-                border: 1px solid {theme['border']};
-            }}
-            QHeaderView::section {{
-                background-color: {theme['header']};
-                color: {theme['text']};
-                padding: 5px;
-                border: none;
-            }}
-            QMenu {{
-                background-color: {theme['background']};
-                color: {theme['text']};
-                border: 1px solid {theme['border']};
-            }}
-            QMenu::item:selected {{
-                background-color: {theme['button_hover']};
-            }}
-        """)
-        
-        # 刷新树形视图
-        self.tree.update()
-
-    def customize_theme(self):
-        # 创建自定义主题对话框
-        dialog = QDialog(self)
-        dialog.setWindowTitle("自定义主题")
-        layout = QVBoxLayout(dialog)
-        
-        # 添加颜色选择器
-        color_grid = QGridLayout()
-        colors = self.themes[self.current_theme]['status_colors']
-        row = 0
-        for status, color in colors.items():
-            label = QLabel(status)
-            button = QPushButton()
-            button.setStyleSheet(f"background-color: {color}")
-            button.clicked.connect(lambda checked, s=status, b=button: self.pick_color(s, b))
-            color_grid.addWidget(label, row, 0)
-            color_grid.addWidget(button, row, 1)
-            row += 1
-        
-        layout.addLayout(color_grid)
-        
-        # 添加确定和取消按钮
-        buttons = QHBoxLayout()
-        ok_button = QPushButton("确定")
-        cancel_button = QPushButton("取消")
-        ok_button.clicked.connect(dialog.accept)
-        cancel_button.clicked.connect(dialog.reject)
-        buttons.addWidget(ok_button)
-        buttons.addWidget(cancel_button)
-        layout.addLayout(buttons)
-        
-        dialog.exec_()
-
-    def pick_color(self, status, button):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            self.themes[self.current_theme]['status_colors'][status] = color.name()
-            button.setStyleSheet(f"background-color: {color.name()}")
-            self.colors = self.themes[self.current_theme]['status_colors']
-            self.tree.update()
-
     def bt_trace_up(self, item):
         """Trace Up - 显示当前target的上游依赖"""
         if item and item.text(1):
             target = item.text(1)
-            print(f"[Trace Up] Checking dependencies for target: {target}")
             try:
                 cmd = f'cd {self.combo_sel} && make -n {target} | grep "^make"'
-                print(f"[Trace Up] Executing command: {cmd}")
                 subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f'{cmd}; exec bash'])
             except Exception as e:
-                print(f"[Trace Up] Error: {e}")
+                pass
 
     def bt_trace_down(self, item):
         """Trace Down - 显示依赖于当前target的下游项目"""
         if item and item.text(1):
             target = item.text(1)
-            print(f"[Trace Down] Checking reverse dependencies for target: {target}")
             try:
                 cmd = f'cd {self.combo_sel}/make_targets && grep -l "{target}" *.csh'
-                print(f"[Trace Down] Executing command: {cmd}")
                 subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f'{cmd}; exec bash'])
             except Exception as e:
-                print(f"[Trace Down] Error: {e}")
+                pass
 
     def bt_terminal(self, item):
         """Terminal - 执行 XMeta_term 命令"""
@@ -920,138 +799,167 @@ class MonitorRuns(QMainWindow):
                 pass
 
     def create_menu(self):
-        """创建菜单栏"""
+        """Create menu bar"""
         menubar = self.menuBar()
         
-        # 设置菜单
-        settings_menu = menubar.addMenu('设置')
+        # Add View menu
+        view_menu = menubar.addMenu('View')
         
-        # 主题子菜单
-        theme_menu = settings_menu.addMenu('主题')
-        
-        # 添加主题选项
-        dark_theme = QAction('深色主题', self)
-        dark_theme.triggered.connect(lambda: self.change_theme('dark'))
-        theme_menu.addAction(dark_theme)
-        
-        light_theme = QAction('浅色主题', self)
-        light_theme.triggered.connect(lambda: self.change_theme('light'))
-        theme_menu.addAction(light_theme)
-        
-        # 添加自定义主题选项
-        customize_theme = QAction('自定义主题', self)
-        customize_theme.triggered.connect(self.customize_theme)
-        theme_menu.addAction(customize_theme)
+        # Add show all runs status action
+        show_all_runs_action = QAction('Show All Runs Status', self)
+        show_all_runs_action.triggered.connect(self.show_all_runs_status)
+        view_menu.addAction(show_all_runs_action)
 
-    def setup_themes(self):
-        """初始化主题配置"""
-        self.themes = {
-            "light": {
-                'background': '#F0F0F0',
-                'text': '#333333',
-                'button': '#ffffff',
-                'button_hover': '#f8f8f8',
-                'header': '#f5f5f5',
-                'border': '#cccccc',
-                'input': '#ffffff',
-                'highlight': '#e8e8e8',
-                'status_colors': {
-                    'finish': '#67c23a',
-                    'skip': '#e6a23c',
-                    'failed': '#f56c6c',
-                    'scheduled': '#409eff',
-                    'running': '#ffd700',
-                    'pending': '#ff9900',
-                    'invalid': '#909399'
-                }
-            }
-        }
-        self.current_theme = "light"
-        self.colors = self.themes[self.current_theme]['status_colors']
+    def show_all_runs_status(self):
+        """Show status of all runs in a new tab"""
+        # Create new tab
+        tab_status = QWidget()
+        tab_status_layout = QVBoxLayout(tab_status)
         
-        # 应用基础样式
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background-color: #F0F0F0;
-                font-family: "Helvetica Neue", "Helvetica", sans-serif;
-                font-size: 13px;
-                color: #333;
-            }
+        # Create tree widget for status display
+        status_tree = QTreeWidget()
+        status_tree.setColumnCount(4)
+        status_tree.setHeaderLabels(["Run Directory", "Latest Target", "Status", "Timestamp"])
+        status_tree.setRootIsDecorated(False)  # 不显示展开箭头
+        
+        # Set column widths
+        header = status_tree.header()
+        header.setSectionResizeMode(0, QHeaderView.Interactive)  # Run Directory 可调整
+        header.setSectionResizeMode(1, QHeaderView.Interactive)  # Latest Target 可调整
+        header.setSectionResizeMode(2, QHeaderView.Fixed)       # Status 固定宽度
+        header.setSectionResizeMode(3, QHeaderView.Stretch)     # Timestamp 自动填充
+        
+        tab_status_layout.addWidget(status_tree)
+        
+        # Get data
+        base_path = self.gen_combo.cur_dir
+        
+        try:
+            entries = os.listdir(base_path)
+        except OSError:
+            return
+
+        run_dirs = [entry for entry in entries 
+                   if os.path.isdir(os.path.join(base_path, entry)) 
+                   and self.is_run_directory(os.path.join(base_path, entry))]
+
+        if not run_dirs:
+            return
+
+        # Add data to tree
+        for run_dir in sorted(run_dirs):
+            run_path = os.path.join(base_path, run_dir)
+            status_dir = os.path.join(run_path, 'status')
             
-            QPushButton {
-                background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                        stop: 0 #ffffff, stop: 1 #f0f0f0);
-                border: 1px solid #cccccc;
-                border-radius: 5px;
-                padding: 5px 15px;
-                min-width: 70px;
-            }
+            if not os.path.isdir(status_dir):
+                item = QTreeWidgetItem(status_tree)
+                item.setText(0, run_dir)
+                item.setText(1, 'N/A')
+                item.setText(2, 'No status dir')
+                item.setText(3, 'N/A')
+                continue
+
+            latest_target, latest_status, latest_mtime = self.get_latest_target_status(status_dir)
+            if not latest_target or not latest_status:
+                item = QTreeWidgetItem(status_tree)
+                item.setText(0, run_dir)
+                item.setText(1, 'N/A')
+                item.setText(2, 'No valid mark files')
+                item.setText(3, 'N/A')
+                continue
+
+            timestamp = datetime.fromtimestamp(latest_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            item = QTreeWidgetItem(status_tree)
+            item.setText(0, run_dir)
+            item.setText(1, latest_target)
+            item.setText(2, latest_status)
+            item.setText(3, timestamp)
             
-            QPushButton:hover {
-                background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                        stop: 0 #f8f8f8, stop: 1 #e8e8e8);
-                border-color: #b3b3b3;
-            }
-            
-            QPushButton:pressed {
-                background-color: #dddddd;
-                border-color: #999999;
-            }
-            
-            QLineEdit {
-                background-color: #ffffff;
-                border: 1px solid #cccccc;
-                border-radius: 3px;
-                padding: 5px;
-                selection-background-color: #bddfff;
-                selection-color: #000000;
-            }
-            
-            QComboBox {
-                background-color: #ffffff;
-                border: 1px solid #cccccc;
-                border-radius: 3px;
-                padding: 5px;
-                min-width: 6em;
-            }
-            
-            QComboBox:hover {
-                border-color: #b3b3b3;
-            }
-            
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            
-            QTreeWidget {
-                background-color: #ffffff;
-                border: 1px solid #cccccc;
-                border-radius: 3px;
-            }
-            
-            QTreeWidget::item {
-                height: 25px;
-            }
-            
-            QTreeWidget::item:selected {
-                font-weight: bold;
-                color: black;
-            }
-            
-            QTreeWidget::item:hover {
-                background-color: rgba(0, 0, 0, 0.05);
-            }
-            
-            QHeaderView::section {
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                        stop:0 #ffffff, stop:1 #f0f0f0);
-                border: none;
-                border-right: 1px solid #cccccc;
-                border-bottom: 1px solid #cccccc;
-                padding: 4px;
-            }
-        """)
+            # Set status color
+            if latest_status in self.colors:
+                color = QColor(self.colors[latest_status])
+                for col in range(item.columnCount()):
+                    item.setBackground(col, QBrush(color))
+
+        # Resize columns to content
+        status_tree.resizeColumnToContents(0)  # Run Directory
+        status_tree.resizeColumnToContents(1)  # Latest Target
+        status_tree.resizeColumnToContents(2)  # Status
+        
+        # Add new tab
+        idx = self.tabwidget.addTab(tab_status, "All Runs Status")
+        self.tabwidget.setCurrentIndex(idx)
+
+    def is_run_directory(self, dir_path):
+        """检查是否为有效的 run 目录"""
+        target_dependency_file = os.path.join(dir_path, '.target_dependency.csh')
+        return os.path.isfile(target_dependency_file)
+
+    def parse_mark_file(self, filename):
+        """解析标记文件名"""
+        if '.' not in filename:
+            return None, None
+        target, status = filename.rsplit('.', 1)
+        return target, status
+
+    def get_latest_target_status(self, status_dir):
+        """获取最新 target 的状态"""
+        latest_target = None
+        latest_status = None
+        latest_mtime = -1
+
+        try:
+            files = os.listdir(status_dir)
+        except OSError as e:
+            print(f"Can not read {status_dir}: {e}", file=sys.stderr)
+            return latest_target, latest_status, latest_mtime
+
+        for file in files:
+            file_path = os.path.join(status_dir, file)
+            if not os.path.isfile(file_path):
+                continue
+            target, status = self.parse_mark_file(file)
+            if not target or not status:
+                continue
+            try:
+                mtime = os.path.getmtime(file_path)
+            except OSError as e:
+                print(f"Can not get timestamp {file_path}: {e}", file=sys.stderr)
+                continue
+
+            if mtime > latest_mtime:
+                latest_mtime = mtime
+                latest_target = target
+                latest_status = status
+
+        return latest_target, latest_status, latest_mtime
+
+    def get_status_color(self, status):
+        """获取状态对应的颜色"""
+        if status == 'failed':
+            return QColor('#f56c6c')  # 红色
+        elif status == 'running':
+            return QColor('#ffd700')  # 黄色
+        elif status == 'pending':
+            return QColor('#ff9900')  # 橙色
+        elif status == 'finish':
+            return QColor('#67c23a')  # 绿色
+        else:
+            return QColor('#333333')  # 默认颜色
+
+    def colorize_status(self, status, fixed_width):
+        """为状态添加颜色"""
+        padded_status = status.ljust(fixed_width)
+        if status == 'failed':
+            return f"{self.ANSI_BOLD}{self.ANSI_RED}{padded_status}{self.ANSI_RESET}"
+        elif status == 'running':
+            return f"{self.ANSI_BOLD}{self.ANSI_YELLOW}{padded_status}{self.ANSI_RESET}"
+        elif status == 'pending':
+            return f"{self.ANSI_BOLD}{self.ANSI_ORANGE}{padded_status}{self.ANSI_RESET}"
+        elif status == 'finish':
+            return f"{self.ANSI_BOLD}{self.ANSI_GREEN}{padded_status}{self.ANSI_RESET}"
+        else:
+            return padded_status
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
