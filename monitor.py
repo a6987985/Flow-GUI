@@ -5,7 +5,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QTabWidget, QTreeWidget, QTreeWidgetItem,
                              QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton, 
                              QStyleFactory, QMenu, QAction, QFileDialog, QMessageBox, QScrollBar, QTreeWidgetItemIterator,
-                             QHeaderView)
+                             QHeaderView, QStyle, QDialog, QTextEdit)
 from PyQt5.QtCore import (Qt, QTimer, QRegExp)
 from PyQt5.QtGui import (QFont, QBrush, QColor, QClipboard, QIcon, QRegExpValidator, QFontMetrics)
 
@@ -58,7 +58,7 @@ class ComboFrame(QWidget):
 class MonitorRuns(QMainWindow):
     def __init__(self):
         super().__init__()
-
+        
         # 环境变量获取
         xmeta_project = os.getenv('XMETA_PROJECT_NAME', 'XMetaProject')
         family = os.getenv('FAMILY', 'Family')
@@ -67,18 +67,21 @@ class MonitorRuns(QMainWindow):
 
         title_name = "Console of XMeta/%s-%s @ %s" %(version, family, xmeta_project)
         self.setWindowTitle(title_name)
-
-        # 颜色字典
+        
+        # 定义基本的状态颜色
         self.colors = {
-            'finish':'lightgreen',
-            'skip':'peachpuff',
-            'failed':'red',
-            'scheduled':'deepskyblue',
-            'running':'yellow',
-            'pending':'orange',
-            'invalid':'skyblue'
+            'finish': '#67c23a',
+            'skip': '#e6a23c',
+            'failed': '#f56c6c',
+            'scheduled': '#409eff',
+            'running': '#ffd700',
+            'pending': '#ff9900',
+            'invalid': '#909399'
         }
-
+        
+        # 创建菜单栏
+        self.create_menu()
+        
         # 主部件
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -106,49 +109,24 @@ class MonitorRuns(QMainWindow):
 
         # 右边部分 - 按钮组
         button_widget = QWidget()
-        button_layout = QVBoxLayout(button_widget)
+        button_layout = QHBoxLayout(button_widget)
         button_layout.setContentsMargins(0,0,0,0)
         button_layout.setSpacing(5)
 
-        # 第一行按钮
-        button_row1 = QWidget()
-        hb1 = QHBoxLayout(button_row1)
-        hb1.setContentsMargins(0,0,0,0)
-        hb1.setSpacing(5)
+        # 添加所有按钮到同一行，移除图标
         bt_runall = QPushButton("run all")
         bt_run = QPushButton("run")
         bt_stop = QPushButton("stop")
         bt_skip = QPushButton("skip")
         bt_unskip = QPushButton("unskip")
         bt_invalid = QPushButton("invalid")
-        hb1.addWidget(bt_runall)
-        hb1.addWidget(bt_run)
-        hb1.addWidget(bt_stop)
-        hb1.addWidget(bt_skip)
-        hb1.addWidget(bt_unskip)
-        hb1.addWidget(bt_invalid)
-
-        # 第二行按钮
-        button_row2 = QWidget()
-        hb2 = QHBoxLayout(button_row2)
-        hb2.setContentsMargins(0,0,0,0)
-        hb2.setSpacing(5)
-        bt_term = QPushButton("term")
-        bt_csh = QPushButton("csh")
-        bt_log = QPushButton("log")
-        bt_cmd = QPushButton("cmd")
-        bt_trace_up = QPushButton("trace up")
-        bt_trace_dn = QPushButton("trace dn")
-        hb2.addWidget(bt_term)
-        hb2.addWidget(bt_csh)
-        hb2.addWidget(bt_log)
-        hb2.addWidget(bt_cmd)
-        hb2.addWidget(bt_trace_up)
-        hb2.addWidget(bt_trace_dn)
-
-        # 将两行按钮添加到按钮布局
-        button_layout.addWidget(button_row1)
-        button_layout.addWidget(button_row2)
+        
+        button_layout.addWidget(bt_runall)
+        button_layout.addWidget(bt_run)
+        button_layout.addWidget(bt_stop)
+        button_layout.addWidget(bt_skip)
+        button_layout.addWidget(bt_unskip)
+        button_layout.addWidget(bt_invalid)
 
         # 将按钮组添加到主菜单布局
         menu_layout.addWidget(button_widget)
@@ -201,12 +179,6 @@ class MonitorRuns(QMainWindow):
         self.gen_combo.combobox.currentIndexChanged.connect(self.click_event)
         self.En_search.returnPressed.connect(self.get_entry)
 
-        bt_trace_up.clicked.connect(lambda: self.retrace_tab('in'))
-        bt_trace_dn.clicked.connect(lambda: self.retrace_tab('out'))
-        bt_cmd.clicked.connect(self.bt_cmd)
-        bt_log.clicked.connect(self.bt_log)
-        bt_csh.clicked.connect(self.bt_csh)
-        bt_term.clicked.connect(self.Xterm)
         bt_invalid.clicked.connect(lambda: self.start('XMeta_invalid'))
         bt_unskip.clicked.connect(lambda: self.start('XMeta_unskip'))
         bt_skip.clicked.connect(lambda: self.start('XMeta_skip'))
@@ -229,6 +201,8 @@ class MonitorRuns(QMainWindow):
         self.resize(1200,800)
         self.center()
 
+        self.create_context_menu()
+
     def center(self):
         qr = self.frameGeometry()
         cp = QApplication.desktop().availableGeometry().center()
@@ -239,20 +213,40 @@ class MonitorRuns(QMainWindow):
         self.get_tree(run_dir)
 
     def click_event(self):
+        """当 combobox 选择改变时触发"""
         cur_text = self.gen_combo.combobox.currentText()
+        
+        # 更新当前选中的 run 目录
+        self.combo_sel = os.path.join(self.gen_combo.cur_dir, cur_text)
+        
+        # 更新 tab 标签
         idx = self.tabwidget.indexOf(self.tab_run)
         if idx >= 0:
             self.tabwidget.setTabText(idx, cur_text)
             self.tabwidget.setCurrentIndex(idx)
+        
+        # 清空并重新加载树
         self.tree.clear()
-        self.change_run()
+        self.get_tree(self.combo_sel)  # 重新加载新 run 的数据
 
     def change_run(self):
-        self.combo_sel = os.path.join(self.gen_combo.cur_dir, self.gen_combo.combobox.currentText())
+        """定时刷新树状态"""
         try:
-            self.get_tree(self.combo_sel)
-        except:
-            pass
+            # 保存当前选中的项
+            current_item = self.tree.currentItem()
+            current_target = current_item.text(1) if current_item else None
+            
+            # 如果之前有选中的项，尝试重新选中
+            if current_target:
+                items = self.tree.findItems(current_target, Qt.MatchExactly | Qt.MatchRecursive, 1)
+                if items:
+                    self.tree.setCurrentItem(items[0])
+                
+            # 刷新树显示
+            self.tree.update()
+            
+        except Exception as e:
+            pass  # 移除错误打印，使用静默处理
 
     def get_entry(self):
         self.filter_tab()
@@ -295,41 +289,71 @@ class MonitorRuns(QMainWindow):
         os.chdir(self.combo_sel)
         os.system('%s' %status)
 
-    def bt_csh(self):
-        selected = self.tree.selectedItems()
-        if not selected:
+    def bt_csh(self, item):
+        """Shell - 打开 make_targets 目录下的 .csh 文件"""
+        if not item or item.childCount() > 0:
             return
-        tar_sel = selected[0].text(1)
-        with open(os.path.join(self.combo_sel, 'user.params'), 'r') as f:
-            a_file = f.read()
-            family_name = re.search(r'FAMILY\s*\=(\s.*)', a_file).group(1).strip()
-        tar_csh = os.path.join(os.path.dirname(os.path.dirname(self.combo_sel)),
-                               'XMeta/%s/actions/%s.csh' %(family_name, tar_sel))
-        if os.path.exists(tar_csh):
-            os.system('gvim %s' %tar_csh)
-        self.tree.clearSelection()
+        
+        target = item.text(1)
+        if not target:
+            return
+        
+        current_target = target
+        current_run = self.combo_sel
+        
+        shell_file = os.path.join(current_run, 'make_targets', f"{current_target}.csh")
+        
+        if os.path.exists(shell_file):
+            try:
+                subprocess.run(['gvim', shell_file], check=True)
+            except subprocess.CalledProcessError:
+                pass
 
-    def bt_log(self):
-        selected = self.tree.selectedItems()
-        for tar in selected:
-            tar_sel = tar.text(1)
-            if os.path.exists(self.combo_sel + '/logs/%s.log.gz' %tar_sel):
-                os.system('gvim %s/logs/%s.log.gz' %(self.combo_sel, tar_sel))
-            elif os.path.exists(self.combo_sel + '/logs/%s.log' %tar_sel):
-                os.system('gvim %s/logs/%s.log' %(self.combo_sel, tar_sel))
-            else:
-                print("Error: cannot find log files")
-        self.tree.clearSelection()
+    def bt_log(self, item):
+        """Log - 打开 logs 目录下的 .log 文件"""
+        if not item or item.childCount() > 0:
+            return
+        
+        target = item.text(1)
+        if not target:
+            return
+        
+        current_target = target
+        current_run = self.combo_sel
+        
+        log_file = os.path.join(current_run, 'logs', f"{current_target}.log")
+        log_file_gz = f"{log_file}.gz"
+        
+        if os.path.exists(log_file):
+            try:
+                subprocess.run(['gvim', log_file], check=True)
+            except subprocess.CalledProcessError:
+                pass
+        elif os.path.exists(log_file_gz):
+            try:
+                subprocess.run(['gvim', log_file_gz], check=True)
+            except subprocess.CalledProcessError:
+                pass
 
-    def bt_cmd(self):
-        selected = self.tree.selectedItems()
-        for tar in selected:
-            tar_sel = tar.text(1)
-            if os.path.exists(self.combo_sel + '/cmds/%s.cmd' %tar_sel):
-                os.system('gvim %s/cmds/%s.cmd' %(self.combo_sel, tar_sel))
-            else:
-                os.system('gvim %s/cmds/%s.tcl' %(self.combo_sel, tar_sel))
-        self.tree.clearSelection()
+    def bt_cmd(self, item):
+        """Command - 打开 cmds 目录下的 .cmd 文件"""
+        if not item or item.childCount() > 0:
+            return
+        
+        target = item.text(1)
+        if not target:
+            return
+        
+        current_target = target
+        current_run = self.combo_sel
+        
+        cmd_file = os.path.join(current_run, 'cmds', f"{current_target}.cmd")
+        
+        if os.path.exists(cmd_file):
+            try:
+                subprocess.run(['gvim', cmd_file], check=True)
+            except subprocess.CalledProcessError:
+                pass
 
     def get_filter_target(self):
         pattern = self.En_search.text()
@@ -498,7 +522,7 @@ class MonitorRuns(QMainWindow):
         l = []
         o = []
         
-        # 用于计算最大target名称宽��
+        # 用于计算最大target名称宽度
         fm = QFontMetrics(self.tree.font())
         max_target_width = 0
         
@@ -540,7 +564,7 @@ class MonitorRuns(QMainWindow):
         # 其他列固定宽度
         self.tree.setColumnWidth(2, 100)  # status列
         self.tree.setColumnWidth(3, 150)  # start time列
-        # end time列不需要设置宽度，因为已经设置为自动填充
+        # end time列需要设置宽度，因为已经设置为自动填充
 
         # 构建树结构
         all_lv = list(set(o))
@@ -648,6 +672,295 @@ class MonitorRuns(QMainWindow):
         if 'scroll' in state:
             self.tree.verticalScrollBar().setValue(state['scroll'])
 
+    def create_context_menu(self):
+        """创建右键菜单"""
+        self.context_menu = QMenu(self)
+        
+        # 添加菜单项
+        terminal_action = self.context_menu.addAction("Terminal")
+        csh_action = self.context_menu.addAction("csh")
+        log_action = self.context_menu.addAction("Log")
+        cmd_action = self.context_menu.addAction("cmd")
+        self.context_menu.addSeparator()
+        trace_up_action = self.context_menu.addAction("Trace Up")
+        trace_down_action = self.context_menu.addAction("Trace Down")
+        
+        # 连接信号到对应的槽函数
+        terminal_action.triggered.connect(lambda: self.bt_terminal(self.tree.currentItem()))
+        csh_action.triggered.connect(lambda: self.bt_csh(self.tree.currentItem()))
+        log_action.triggered.connect(lambda: self.bt_log(self.tree.currentItem()))
+        cmd_action.triggered.connect(lambda: self.bt_cmd(self.tree.currentItem()))
+        trace_up_action.triggered.connect(lambda: self.bt_trace_up(self.tree.currentItem()))
+        trace_down_action.triggered.connect(lambda: self.bt_trace_down(self.tree.currentItem()))
+        
+        # 设置树形视图上下文菜单策略
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.show_context_menu)
+
+    def show_context_menu(self, position):
+        """显示右键菜单"""
+        item = self.tree.itemAt(position)
+        if item:
+            # 确保只在叶子节点上显示完整菜单
+            if item.childCount() == 0:  # 叶子节点
+                self.context_menu.exec_(self.tree.viewport().mapToGlobal(position))
+
+    def bt_trace_up(self, item):
+        """Trace Up - 显示当前target的上游依赖"""
+        if item and item.text(1):
+            target = item.text(1)
+            try:
+                cmd = f'cd {self.combo_sel} && make -n {target} | grep "^make"'
+                subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f'{cmd}; exec bash'])
+            except Exception as e:
+                pass
+
+    def bt_trace_down(self, item):
+        """Trace Down - 显示依赖于当前target的下游项目"""
+        if item and item.text(1):
+            target = item.text(1)
+            try:
+                cmd = f'cd {self.combo_sel}/make_targets && grep -l "{target}" *.csh'
+                subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f'{cmd}; exec bash'])
+            except Exception as e:
+                pass
+
+    def bt_terminal(self, item):
+        """Terminal - 执行 XMeta_term 命令"""
+        try:
+            os.chdir(self.combo_sel)
+            os.system('XMeta_term')
+        except Exception as e:
+            pass
+
+    def bt_csh(self, item):
+        """Shell - 打开 make_targets 目录下的 .csh 文件"""
+        if not item or item.childCount() > 0:
+            return
+        
+        target = item.text(1)
+        if not target:
+            return
+        
+        current_target = target
+        current_run = self.combo_sel
+        
+        shell_file = os.path.join(current_run, 'make_targets', f"{current_target}.csh")
+        
+        if os.path.exists(shell_file):
+            try:
+                subprocess.run(['gvim', shell_file], check=True)
+            except subprocess.CalledProcessError:
+                pass
+
+    def bt_log(self, item):
+        """Log - 打开 logs 目录下的 .log 文件"""
+        if not item or item.childCount() > 0:
+            return
+        
+        target = item.text(1)
+        if not target:
+            return
+        
+        current_target = target
+        current_run = self.combo_sel
+        
+        log_file = os.path.join(current_run, 'logs', f"{current_target}.log")
+        log_file_gz = f"{log_file}.gz"
+        
+        if os.path.exists(log_file):
+            try:
+                subprocess.run(['gvim', log_file], check=True)
+            except subprocess.CalledProcessError:
+                pass
+        elif os.path.exists(log_file_gz):
+            try:
+                subprocess.run(['gvim', log_file_gz], check=True)
+            except subprocess.CalledProcessError:
+                pass
+
+    def bt_cmd(self, item):
+        """Command - 打开 cmds 目录下的 .cmd 文件"""
+        if not item or item.childCount() > 0:
+            return
+        
+        target = item.text(1)
+        if not target:
+            return
+        
+        current_target = target
+        current_run = self.combo_sel
+        
+        cmd_file = os.path.join(current_run, 'cmds', f"{current_target}.cmd")
+        
+        if os.path.exists(cmd_file):
+            try:
+                subprocess.run(['gvim', cmd_file], check=True)
+            except subprocess.CalledProcessError:
+                pass
+
+    def create_menu(self):
+        """Create menu bar"""
+        menubar = self.menuBar()
+        
+        # Add View menu
+        view_menu = menubar.addMenu('View')
+        
+        # Add show all runs status action
+        show_all_runs_action = QAction('Show All Runs Status', self)
+        show_all_runs_action.triggered.connect(self.show_all_runs_status)
+        view_menu.addAction(show_all_runs_action)
+
+    def show_all_runs_status(self):
+        """Show status of all runs in a new tab"""
+        # Create new tab
+        tab_status = QWidget()
+        tab_status_layout = QVBoxLayout(tab_status)
+        
+        # Create tree widget for status display
+        status_tree = QTreeWidget()
+        status_tree.setColumnCount(4)
+        status_tree.setHeaderLabels(["Run Directory", "Latest Target", "Status", "Timestamp"])
+        status_tree.setRootIsDecorated(False)  # 不显示展开箭头
+        
+        # Set column widths
+        header = status_tree.header()
+        header.setSectionResizeMode(0, QHeaderView.Interactive)  # Run Directory 可调整
+        header.setSectionResizeMode(1, QHeaderView.Interactive)  # Latest Target 可调整
+        header.setSectionResizeMode(2, QHeaderView.Fixed)       # Status 固定宽度
+        header.setSectionResizeMode(3, QHeaderView.Stretch)     # Timestamp 自动填充
+        
+        tab_status_layout.addWidget(status_tree)
+        
+        # Get data
+        base_path = self.gen_combo.cur_dir
+        
+        try:
+            entries = os.listdir(base_path)
+        except OSError:
+            return
+
+        run_dirs = [entry for entry in entries 
+                   if os.path.isdir(os.path.join(base_path, entry)) 
+                   and self.is_run_directory(os.path.join(base_path, entry))]
+
+        if not run_dirs:
+            return
+
+        # Add data to tree
+        for run_dir in sorted(run_dirs):
+            run_path = os.path.join(base_path, run_dir)
+            status_dir = os.path.join(run_path, 'status')
+            
+            if not os.path.isdir(status_dir):
+                item = QTreeWidgetItem(status_tree)
+                item.setText(0, run_dir)
+                item.setText(1, 'N/A')
+                item.setText(2, 'No status dir')
+                item.setText(3, 'N/A')
+                continue
+
+            latest_target, latest_status, latest_mtime = self.get_latest_target_status(status_dir)
+            if not latest_target or not latest_status:
+                item = QTreeWidgetItem(status_tree)
+                item.setText(0, run_dir)
+                item.setText(1, 'N/A')
+                item.setText(2, 'No valid mark files')
+                item.setText(3, 'N/A')
+                continue
+
+            timestamp = datetime.fromtimestamp(latest_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            item = QTreeWidgetItem(status_tree)
+            item.setText(0, run_dir)
+            item.setText(1, latest_target)
+            item.setText(2, latest_status)
+            item.setText(3, timestamp)
+            
+            # Set status color
+            if latest_status in self.colors:
+                color = QColor(self.colors[latest_status])
+                for col in range(item.columnCount()):
+                    item.setBackground(col, QBrush(color))
+
+        # Resize columns to content
+        status_tree.resizeColumnToContents(0)  # Run Directory
+        status_tree.resizeColumnToContents(1)  # Latest Target
+        status_tree.resizeColumnToContents(2)  # Status
+        
+        # Add new tab
+        idx = self.tabwidget.addTab(tab_status, "All Runs Status")
+        self.tabwidget.setCurrentIndex(idx)
+
+    def is_run_directory(self, dir_path):
+        """检查是否为有效的 run 目录"""
+        target_dependency_file = os.path.join(dir_path, '.target_dependency.csh')
+        return os.path.isfile(target_dependency_file)
+
+    def parse_mark_file(self, filename):
+        """解析标记文件名"""
+        if '.' not in filename:
+            return None, None
+        target, status = filename.rsplit('.', 1)
+        return target, status
+
+    def get_latest_target_status(self, status_dir):
+        """获取最新 target 的状态"""
+        latest_target = None
+        latest_status = None
+        latest_mtime = -1
+
+        try:
+            files = os.listdir(status_dir)
+        except OSError as e:
+            print(f"Can not read {status_dir}: {e}", file=sys.stderr)
+            return latest_target, latest_status, latest_mtime
+
+        for file in files:
+            file_path = os.path.join(status_dir, file)
+            if not os.path.isfile(file_path):
+                continue
+            target, status = self.parse_mark_file(file)
+            if not target or not status:
+                continue
+            try:
+                mtime = os.path.getmtime(file_path)
+            except OSError as e:
+                print(f"Can not get timestamp {file_path}: {e}", file=sys.stderr)
+                continue
+
+            if mtime > latest_mtime:
+                latest_mtime = mtime
+                latest_target = target
+                latest_status = status
+
+        return latest_target, latest_status, latest_mtime
+
+    def get_status_color(self, status):
+        """获取状态对应的颜色"""
+        if status == 'failed':
+            return QColor('#f56c6c')  # 红色
+        elif status == 'running':
+            return QColor('#ffd700')  # 黄色
+        elif status == 'pending':
+            return QColor('#ff9900')  # 橙色
+        elif status == 'finish':
+            return QColor('#67c23a')  # 绿色
+        else:
+            return QColor('#333333')  # 默认颜色
+
+    def colorize_status(self, status, fixed_width):
+        """为状态添加颜色"""
+        padded_status = status.ljust(fixed_width)
+        if status == 'failed':
+            return f"{self.ANSI_BOLD}{self.ANSI_RED}{padded_status}{self.ANSI_RESET}"
+        elif status == 'running':
+            return f"{self.ANSI_BOLD}{self.ANSI_YELLOW}{padded_status}{self.ANSI_RESET}"
+        elif status == 'pending':
+            return f"{self.ANSI_BOLD}{self.ANSI_ORANGE}{padded_status}{self.ANSI_RESET}"
+        elif status == 'finish':
+            return f"{self.ANSI_BOLD}{self.ANSI_GREEN}{padded_status}{self.ANSI_RESET}"
+        else:
+            return padded_status
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
