@@ -1,0 +1,17 @@
+Scenario 'setup_tt0p85v85c_typical_typical100c_FuncTT0p85v'
+Timing Path Group 'reg2reg'
+Critical Path Slack: -0.02535
+Total Negative Slack: -4.31913
+No. of Violating Paths: 558
+
+Scenario 'setup_tt0p85v85c_typical_typical100c_FuncTT0p85v'
+Timing Path Group 'reg2out'
+Critical Path Slack: -0.00708
+Total Negative Slack: -0.02818
+No. of Violating Paths: 43
+
+Scenario 'hold_tt0p85v85c_typical_typical100c_FuncTT0p85v'
+Timing Path Group 'reg2reg'
+Critical Path Slack: 0.00123
+Total Negative Slack: 0.00000
+No. of Violating Paths: 0 
