@@ -55,7 +55,6 @@ class ComboFrame(QWidget):
         self.new_list.sort(key=self.all_runs.index)
         return self.new_list
 
-
 class MonitorRuns(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -207,9 +206,9 @@ class MonitorRuns(QMainWindow):
                 background-color: #6B5B95;
                 color: white;
                 border: none;
-                border-radius: 15px;
-                padding: 8px 16px;
-                min-width: 80px;
+                border-radius: 14px;
+                padding: 6px 16px;
+                min-width: 40px;
                 font-size: 14px;
             }
             QPushButton:hover {
@@ -430,8 +429,8 @@ class MonitorRuns(QMainWindow):
                                             item.setText(3, timestamp)
                             iterator += 1
                     else:
-                        # 对于其他 tab，使用 tab 标题作为 run 目录名
-                        run_dir = os.path.join(self.gen_combo.cur_dir, tab_text)
+                        # 对于retrace tab和主tab，使用当前选中的run目录
+                        run_dir = self.combo_sel
                         
                         # 保存选中状态
                         selected_items = tree_widget.selectedItems()
@@ -460,10 +459,12 @@ class MonitorRuns(QMainWindow):
                                         color = QColor(self.colors[new_status])
                                         for col in range(item.columnCount()):
                                             item.setBackground(col, QBrush(color))
-                                    
-                                    # 更新时间信息
-                                    tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
-                                    start_time, end_time = self.get_start_end_time(tgt_track_file)
+                                
+                                # 更新时间信息，无论状态是否改变
+                                tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
+                                start_time, end_time = self.get_start_end_time(tgt_track_file)
+                                # 只有当时间确实存在时才更新
+                                if start_time or end_time:
                                     item.setText(3, start_time)
                                     item.setText(4, end_time)
                             
