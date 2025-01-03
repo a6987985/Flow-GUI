@@ -398,41 +398,83 @@ class MonitorRuns(QMainWindow):
                 tree_widgets = tab.findChildren(QTreeWidget)
                 
                 for tree_widget in tree_widgets:
-                    # 保存选中状态
-                    selected_items = tree_widget.selectedItems()
-                    selected_info = []
-                    for item in selected_items:
-                        if item.parent():
-                            selected_info.append((item.parent().text(0), item.text(1)))
-                    
-                    # 遍历所有项目并更新状态
-                    iterator = QTreeWidgetItemIterator(tree_widget)
-                    while iterator.value():
-                        item = iterator.value()
-                        if item.text(1):  # 如果有target名称
-                            target = item.text(1)
-                            target_file = os.path.join(self.combo_sel, 'status', target)
-                            new_status = self.get_target_status(target_file)
-                            
-                            # 如果状态发生变化，更新状态和颜色
-                            if new_status != item.text(2):
-                                item.setText(2, new_status)
-                                self.set_item_color(item, new_status)
-                                
-                                # 更新时间信息
-                                tgt_track_file = os.path.join(self.combo_sel, 'logs/targettracker', target)
-                                start_time, end_time = self.get_start_end_time(tgt_track_file)
-                                item.setText(3, start_time)
-                                item.setText(4, end_time)
+                    # 获取当前 tab 对应的 run 目录
+                    tab_text = self.tabwidget.tabText(i)
+                    if tab_text == "All Runs Status":
+                        # 对于 All Runs Status tab，每个项目都有自己的 run 目录
+                        iterator = QTreeWidgetItemIterator(tree_widget)
+                        while iterator.value():
+                            item = iterator.value()
+                            if item.text(0):  # Run Directory
+                                run_dir = os.path.join(self.gen_combo.cur_dir, item.text(0))
+                                target = item.text(1)
+                                if target != "N/A":
+                                    target_file = os.path.join(run_dir, 'status', target)
+                                    new_status = self.get_target_status(target_file)
+                                    
+                                    # 如果状态发生变化，更新状态和颜色
+                                    if new_status != item.text(2):
+                                        item.setText(2, new_status)
+                                        # 清除所有列的背景色
+                                        for col in range(item.columnCount()):
+                                            item.setBackground(col, QBrush())
+                                        # 设置新的背景色
+                                        if new_status in self.colors:
+                                            color = QColor(self.colors[new_status])
+                                            for col in range(item.columnCount()):
+                                                item.setBackground(col, QBrush(color))
+                                        
+                                        # 更新时间戳
+                                        if new_status != "":
+                                            timestamp = datetime.fromtimestamp(os.path.getmtime(target_file)).strftime("%Y-%m-%d %H:%M:%S")
+                                            item.setText(3, timestamp)
+                            iterator += 1
+                    else:
+                        # 对于其他 tab，使用 tab 标题作为 run 目录名
+                        run_dir = os.path.join(self.gen_combo.cur_dir, tab_text)
                         
-                        iterator += 1
-                    
-                    # 恢复选中状态
-                    for parent_text, target_text in selected_info:
-                        items = tree_widget.findItems(target_text, Qt.MatchExactly | Qt.MatchRecursive, 1)
-                        for item in items:
-                            if item.parent() and item.parent().text(0) == parent_text:
-                                item.setSelected(True)
+                        # 保存选中状态
+                        selected_items = tree_widget.selectedItems()
+                        selected_info = []
+                        for item in selected_items:
+                            if item.parent():
+                                selected_info.append((item.parent().text(0), item.text(1)))
+                        
+                        # 遍历所有项目并更新状态
+                        iterator = QTreeWidgetItemIterator(tree_widget)
+                        while iterator.value():
+                            item = iterator.value()
+                            if item.text(1):  # 如果有target名称
+                                target = item.text(1)
+                                target_file = os.path.join(run_dir, 'status', target)
+                                new_status = self.get_target_status(target_file)
+                                
+                                # 如果状态发生变化，更新状态和颜色
+                                if new_status != item.text(2):
+                                    item.setText(2, new_status)
+                                    # 清除所有列的背景色
+                                    for col in range(item.columnCount()):
+                                        item.setBackground(col, QBrush())
+                                    # 设置新的背景色
+                                    if new_status in self.colors:
+                                        color = QColor(self.colors[new_status])
+                                        for col in range(item.columnCount()):
+                                            item.setBackground(col, QBrush(color))
+                                    
+                                    # 更新时间信息
+                                    tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
+                                    start_time, end_time = self.get_start_end_time(tgt_track_file)
+                                    item.setText(3, start_time)
+                                    item.setText(4, end_time)
+                            
+                            iterator += 1
+                        
+                        # 恢复选中状态
+                        for parent_text, target_text in selected_info:
+                            items = tree_widget.findItems(target_text, Qt.MatchExactly | Qt.MatchRecursive, 1)
+                            for item in items:
+                                if item.parent() and item.parent().text(0) == parent_text:
+                                    item.setSelected(True)
                 
         except Exception as e:
             print(f"Error in change_run: {e}")  # 添加错误日志
