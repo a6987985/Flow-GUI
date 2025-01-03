@@ -390,26 +390,52 @@ class MonitorRuns(QMainWindow):
         self.get_tree(self.combo_sel)  # 重新加载新 run 的数据
 
     def change_run(self):
-        """定时刷新树状态"""
+        """定时刷新所有树状态"""
         try:
-            # 保存所有选中的项
-            selected_items = self.tree.selectedItems()
-            selected_info = []
-            for item in selected_items:
-                if item.parent():
-                    selected_info.append((item.parent().text(0), item.text(1)))
-            
-            # 刷新树显示
-            self.tree.update()
-            
-            # 恢复所有选中状态
-            for parent_text, target_text in selected_info:
-                items = self.tree.findItems(target_text, Qt.MatchExactly | Qt.MatchRecursive, 1)
-                for item in items:
-                    if item.parent() and item.parent().text(0) == parent_text:
-                        item.setSelected(True)
+            # 更新所有 tab 中的树控件
+            for i in range(self.tabwidget.count()):
+                tab = self.tabwidget.widget(i)
+                tree_widgets = tab.findChildren(QTreeWidget)
+                
+                for tree_widget in tree_widgets:
+                    # 保存选中状态
+                    selected_items = tree_widget.selectedItems()
+                    selected_info = []
+                    for item in selected_items:
+                        if item.parent():
+                            selected_info.append((item.parent().text(0), item.text(1)))
+                    
+                    # 遍历所有项目并更新状态
+                    iterator = QTreeWidgetItemIterator(tree_widget)
+                    while iterator.value():
+                        item = iterator.value()
+                        if item.text(1):  # 如果有target名称
+                            target = item.text(1)
+                            target_file = os.path.join(self.combo_sel, 'status', target)
+                            new_status = self.get_target_status(target_file)
+                            
+                            # 如果状态发生变化，更新状态和颜色
+                            if new_status != item.text(2):
+                                item.setText(2, new_status)
+                                self.set_item_color(item, new_status)
+                                
+                                # 更新时间信息
+                                tgt_track_file = os.path.join(self.combo_sel, 'logs/targettracker', target)
+                                start_time, end_time = self.get_start_end_time(tgt_track_file)
+                                item.setText(3, start_time)
+                                item.setText(4, end_time)
+                        
+                        iterator += 1
+                    
+                    # 恢复选中状态
+                    for parent_text, target_text in selected_info:
+                        items = tree_widget.findItems(target_text, Qt.MatchExactly | Qt.MatchRecursive, 1)
+                        for item in items:
+                            if item.parent() and item.parent().text(0) == parent_text:
+                                item.setSelected(True)
                 
         except Exception as e:
+            print(f"Error in change_run: {e}")  # 添加错误日志
             pass  # 静默处理异常
 
     def get_entry(self):
@@ -428,23 +454,38 @@ class MonitorRuns(QMainWindow):
             self.tabwidget.removeTab(index)
 
     def start(self, status):
-        # 与原逻辑一致
+        """根据当前活动的 tab 执行命令"""
         if status == 'XMeta_run all':
             self.bt_notar(status)
         else:
-            self.bt_event(status)
+            # 获取当前活动的 tab
+            current_tab = self.tabwidget.currentWidget()
+            # 根据当前 tab 获取对应的树控件
+            tree_widget = None
+            if current_tab == self.tab_run:
+                tree_widget = self.tree
+            else:
+                # 在当前 tab 中查找 QTreeWidget
+                for child in current_tab.findChildren(QTreeWidget):
+                    tree_widget = child
+                    break
+            
+            self.bt_event(status, tree_widget)
 
     def Xterm(self):
         os.chdir(self.combo_sel)
         os.system('XMeta_term')
 
-    def bt_event(self, status):
-        selected = self.tree.selectedItems()
+    def bt_event(self, status, tree_widget=None):
+        """处理按钮事件，支持从指定的树获取选中项"""
+        # 如果没有指定树，使用主树
+        selected_tree = tree_widget if tree_widget else self.tree
+        selected = selected_tree.selectedItems()
         os.chdir(self.combo_sel)
         select_run_targets = " ".join([itm.text(1) for itm in selected if itm.text(1) != ""])
         if select_run_targets.strip():
             os.system('%s %s' %(status, select_run_targets))
-        self.tree.clearSelection()
+        selected_tree.clearSelection()
 
     def bt_notar(self, status):
         os.chdir(self.combo_sel)
@@ -607,11 +648,13 @@ class MonitorRuns(QMainWindow):
         if self.retrace_tar_name:
             tab_trace = QWidget()
             trace_layout = QVBoxLayout(tab_trace)
+
             retrace_tree = QTreeWidget()
             retrace_tree.setColumnCount(5)  # 修改为5列
             retrace_tree.setHeaderLabels(["level", "target", "status", "start time", "end time"])  # 添加所有列标签
             retrace_tree.setRootIsDecorated(True)
             retrace_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+            retrace_tree.itemDoubleClicked.connect(lambda: self.copy_tar_from_tree(retrace_tree))
 
             # 设置列宽和调整模式
             header = retrace_tree.header()
@@ -624,6 +667,30 @@ class MonitorRuns(QMainWindow):
             retrace_tree.setColumnWidth(2, 100)  # status列
             retrace_tree.setColumnWidth(3, 150)  # start time列
             retrace_tree.setColumnWidth(4, 150)  # end time列
+
+            # 创建右键菜单
+            context_menu = QMenu()
+            terminal_action = context_menu.addAction("Terminal")
+            csh_action = context_menu.addAction("csh")
+            log_action = context_menu.addAction("Log")
+            cmd_action = context_menu.addAction("cmd")
+            context_menu.addSeparator()
+            trace_up_action = context_menu.addAction("Trace Up")
+            trace_down_action = context_menu.addAction("Trace Down")
+
+            # 连接右键菜单事件
+            terminal_action.triggered.connect(lambda: self.bt_terminal(retrace_tree.currentItem()))
+            csh_action.triggered.connect(lambda: self.bt_csh(retrace_tree.currentItem()))
+            log_action.triggered.connect(lambda: self.bt_log(retrace_tree.currentItem()))
+            cmd_action.triggered.connect(lambda: self.bt_cmd(retrace_tree.currentItem()))
+            trace_up_action.triggered.connect(lambda: self.bt_trace_up(retrace_tree.currentItem()))
+            trace_down_action.triggered.connect(lambda: self.bt_trace_down(retrace_tree.currentItem()))
+
+            # 设置右键菜单策略
+            retrace_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+            retrace_tree.customContextMenuRequested.connect(
+                lambda pos, tree=retrace_tree, menu=context_menu: self.show_context_menu_for_tree(pos, tree, menu)
+            )
 
             trace_layout.addWidget(retrace_tree)
 
@@ -674,16 +741,14 @@ class MonitorRuns(QMainWindow):
                 item.setText(3, data[3])   # start time
                 item.setText(4, data[4])   # end time
                 self.set_item_color(item, data[2])
+                
+                # 将item添加到对应level的列表中
+                if str_data not in level_items:
+                    level_items[str_data] = []
+                    # 第一个item设置为可展开
+                    item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
+                    item.setExpanded(True)
                 level_items[str_data].append(item)
-
-            # 为每个level的第一个item设置展开/折叠指示器
-            for level, items in level_items.items():
-                if items:
-                    first_item = items[0]
-                    first_item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
-                    first_item.setExpanded(True)
-                    # 设置为有子节点，这样就会一直显示三角标
-                    first_item.setFlags(first_item.flags() | Qt.ItemIsTristate)
 
             # 创建事件过滤器并保存状态
             event_filter = FilterTreeEventFilter(retrace_tree)
@@ -1235,6 +1300,12 @@ class MonitorRuns(QMainWindow):
             else:
                 for i, item in enumerate(items):
                     item.setHidden(i != 0)  # 只有第一个item不隐藏
+
+    def show_context_menu_for_tree(self, position, tree_widget, context_menu):
+        """为指定的树控件显示右键菜单"""
+        item = tree_widget.itemAt(position)
+        if item and item.childCount() == 0:  # 只在叶子节点上显示菜单
+            context_menu.exec_(tree_widget.viewport().mapToGlobal(position))
 
 class FilterTreeEventFilter(QObject):
     def __init__(self, tree):
