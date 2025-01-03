@@ -575,11 +575,25 @@ class MonitorRuns(QMainWindow):
             self.set_item_color(item, data[2])
             level_items[str_data].append(item)
 
-        # 初始化level展开状态
-        level_expanded = {level: True for level in all_lv}
+        # 为每个level的第一个item设置展开/折叠指示器
+        for level, items in level_items.items():
+            if items:
+                first_item = items[0]
+                first_item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
+                first_item.setExpanded(True)
+                # 设置为有子节点，这样就会一直显示三角标
+                first_item.setFlags(first_item.flags() | Qt.ItemIsTristate)
 
-        # 添加事件过滤器处理点击事件
-        filter_tree.viewport().installEventFilter(FilterTreeEventFilter(filter_tree, level_items, level_expanded))
+        # 创建事件过滤器并保存状态
+        event_filter = FilterTreeEventFilter(filter_tree)
+        event_filter.level_items = level_items
+        event_filter.level_expanded = {level: True for level in all_lv}
+        
+        # 添加事件过滤器
+        filter_tree.viewport().installEventFilter(event_filter)
+        
+        # 保存事件过滤器的引用，防止被垃圾回收
+        filter_tree.event_filter = event_filter
 
         idx = self.tabwidget.addTab(tab_filter, self.En_search.text())
         self.tabwidget.setCurrentIndex(idx)
@@ -661,6 +675,15 @@ class MonitorRuns(QMainWindow):
                 item.setText(4, data[4])   # end time
                 self.set_item_color(item, data[2])
                 level_items[str_data].append(item)
+
+            # 为每个level的第一个item设置展开/折叠指示器
+            for level, items in level_items.items():
+                if items:
+                    first_item = items[0]
+                    first_item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
+                    first_item.setExpanded(True)
+                    # 设置为有子节点，这样就会一直显示三角标
+                    first_item.setFlags(first_item.flags() | Qt.ItemIsTristate)
 
             # 创建事件过滤器并保存状态
             event_filter = FilterTreeEventFilter(retrace_tree)
@@ -798,6 +821,15 @@ class MonitorRuns(QMainWindow):
             
             # 将item添加到对应level的列表中
             self.level_items[str_data].append(item)
+
+        # 为每个level的第一个item设置展开/折叠指示器
+        for level, items in self.level_items.items():
+            if items:
+                first_item = items[0]
+                first_item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
+                first_item.setExpanded(self.level_expanded[level])
+                # 设置为有子节点，这样就会一直显示三角标
+                first_item.setFlags(first_item.flags() | Qt.ItemIsTristate)
 
         # 使用事件过滤器处理点击事件
         self.tree.viewport().installEventFilter(self)
@@ -1192,6 +1224,9 @@ class MonitorRuns(QMainWindow):
             # 切换展开状态
             self.level_expanded[level] = not self.level_expanded[level]
             
+            # 更新第一个item的展开状态
+            items[0].setExpanded(self.level_expanded[level])
+            
             # 如果是展开状态，显示所有items
             if self.level_expanded[level]:
                 for item in items:
@@ -1232,6 +1267,9 @@ class FilterTreeEventFilter(QObject):
 
             # 切换展开状态
             self.level_expanded[level] = not self.level_expanded[level]
+            
+            # 更新第一个item的展开状态
+            items[0].setExpanded(self.level_expanded[level])
             
             # 如果是展开状态，显示所有items
             if self.level_expanded[level]:
