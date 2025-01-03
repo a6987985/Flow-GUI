@@ -87,6 +87,33 @@ class MonitorRuns(QMainWindow):
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
 
+        # 设置全局背景色
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background-color: #F3E5F5;
+                color: black;
+            }
+            QTreeWidget {
+                background-color: white;
+                color: black;
+            }
+            QTabWidget::pane {
+                background-color: white;
+            }
+            QTabBar::tab {
+                background-color: #E1BEE7;
+                color: black;
+                padding: 5px;
+            }
+            QTabBar::tab:selected {
+                background-color: white;
+                color: black;
+            }
+            QLabel, QComboBox, QLineEdit {
+                color: black;
+            }
+        """)
+
         # MenuFrame
         self.MenuFrame = QWidget()
         menu_layout = QHBoxLayout(self.MenuFrame)
@@ -113,7 +140,26 @@ class MonitorRuns(QMainWindow):
         button_layout.setContentsMargins(0,0,0,0)
         button_layout.setSpacing(5)
 
-        # 添加所有按钮到同一行，移除图标
+        # 定义按钮样式
+        button_style = """
+            QPushButton {
+                background-color: #6B5B95;
+                color: white;
+                border: none;
+                border-radius: 15px;
+                padding: 8px 16px;
+                min-width: 80px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #8677AD;
+            }
+            QPushButton:pressed {
+                background-color: #574B7C;
+            }
+        """
+
+        # 添加所有按钮到同一行，应用新样式
         bt_runall = QPushButton("run all")
         bt_run = QPushButton("run")
         bt_stop = QPushButton("stop")
@@ -121,12 +167,10 @@ class MonitorRuns(QMainWindow):
         bt_unskip = QPushButton("unskip")
         bt_invalid = QPushButton("invalid")
         
-        button_layout.addWidget(bt_runall)
-        button_layout.addWidget(bt_run)
-        button_layout.addWidget(bt_stop)
-        button_layout.addWidget(bt_skip)
-        button_layout.addWidget(bt_unskip)
-        button_layout.addWidget(bt_invalid)
+        # 应用样式到所有按钮
+        for button in [bt_runall, bt_run, bt_stop, bt_skip, bt_unskip, bt_invalid]:
+            button.setStyleSheet(button_style)
+            button_layout.addWidget(button)
 
         # 将按钮组添加到主菜单布局
         menu_layout.addWidget(button_widget)
@@ -232,21 +276,25 @@ class MonitorRuns(QMainWindow):
     def change_run(self):
         """定时刷新树状态"""
         try:
-            # 保存当前选中的项
-            current_item = self.tree.currentItem()
-            current_target = current_item.text(1) if current_item else None
+            # 保存所有选中的项
+            selected_items = self.tree.selectedItems()
+            selected_info = []
+            for item in selected_items:
+                if item.parent():
+                    selected_info.append((item.parent().text(0), item.text(1)))
             
-            # 如果之前有选中的项，尝试重新选中
-            if current_target:
-                items = self.tree.findItems(current_target, Qt.MatchExactly | Qt.MatchRecursive, 1)
-                if items:
-                    self.tree.setCurrentItem(items[0])
-                
             # 刷新树显示
             self.tree.update()
             
+            # 恢复所有选中状态
+            for parent_text, target_text in selected_info:
+                items = self.tree.findItems(target_text, Qt.MatchExactly | Qt.MatchRecursive, 1)
+                for item in items:
+                    if item.parent() and item.parent().text(0) == parent_text:
+                        item.setSelected(True)
+                
         except Exception as e:
-            pass  # 移除错误打印，使用静默处理
+            pass  # 静默处理异常
 
     def get_entry(self):
         self.filter_tab()
