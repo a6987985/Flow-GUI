@@ -5,8 +5,8 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QTabWidget, QTreeWidget, QTreeWidgetItem,
                              QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton, 
                              QStyleFactory, QMenu, QAction, QFileDialog, QMessageBox, QScrollBar, QTreeWidgetItemIterator,
-                             QHeaderView, QStyle, QDialog, QTextEdit)
-from PyQt5.QtCore import (Qt, QTimer, QRegExp)
+                             QHeaderView, QStyle, QDialog, QTextEdit, QTabBar)
+from PyQt5.QtCore import (Qt, QTimer, QRegExp, QObject)
 from PyQt5.QtGui import (QFont, QBrush, QColor, QClipboard, QIcon, QRegExpValidator, QFontMetrics)
 
 class ComboFrame(QWidget):
@@ -24,16 +24,17 @@ class ComboFrame(QWidget):
         fm = QFontMetrics(font)
         max_len = 0
         for i in self.new_list:
-            w = fm.width(i)
+            w = fm.horizontalAdvance(i)  # 使用 horizontalAdvance 获取更准确的宽度
             if w > max_len:
                 max_len = w
-        combo_width = max_len // 4 if max_len > 0 else 10
+
+        # 设置合适的宽度，添加一些额外空间用于下拉箭头和边距
+        combo_width = max_len + 50  # 增加50像素作为缓冲
 
         self.combobox = QComboBox()
         self.combobox.addItems(self.new_list)
         self.combobox.setEditable(False)
-        # 宽度可根据需要适当调整
-        self.combobox.setMinimumWidth(combo_width*7)
+        self.combobox.setMinimumWidth(combo_width)
         layout.addWidget(self.combobox)
 
     def get_combo_value(self):
@@ -245,7 +246,7 @@ class MonitorRuns(QMainWindow):
 
         # 添加TabWidget
         self.tabwidget = QTabWidget()
-        self.tabwidget.setTabsClosable(True)
+        self.tabwidget.setTabsClosable(True)  # 设置标签可关闭
         self.tabwidget.setMovable(True)
         self.tabwidget.tabCloseRequested.connect(self.close_tab)
         main_layout.addWidget(self.tabwidget)
@@ -256,7 +257,8 @@ class MonitorRuns(QMainWindow):
         # 主Tab
         self.tab_run = QWidget()
         tab_run_layout = QVBoxLayout(self.tab_run)
-        self.tabwidget.addTab(self.tab_run, self.gen_combo.combobox.currentText())
+        idx = self.tabwidget.addTab(self.tab_run, self.gen_combo.combobox.currentText())
+        self.tabwidget.tabBar().setTabButton(idx, QTabBar.RightSide, None)  # 移除主tab的关闭按钮
 
         # Treeview
         self.tree = QTreeWidget()
@@ -421,11 +423,8 @@ class MonitorRuns(QMainWindow):
         cb.setText(" ".join(tar_selected))
 
     def close_tab(self, index):
-        if index == self.tabwidget.indexOf(self.tab_run):
-            # 主tab不关闭，只关闭filter或retrace产生的
-            if self.tabwidget.count() > 1:
-                self.tabwidget.removeTab(index)
-        else:
+        """关闭标签页，但主tab不能关闭"""
+        if self.tabwidget.widget(index) != self.tab_run:  # 如果不是主tab
             self.tabwidget.removeTab(index)
 
     def start(self, status):
@@ -563,15 +562,24 @@ class MonitorRuns(QMainWindow):
         all_lv = list(set(o))
         all_lv.sort(key=o.index)
 
-        for i in all_lv:
-            open_status = True
-            parent_item = QTreeWidgetItem(filter_tree, [i])
-            for data in l:
-                str_data = ''.join(data[0])
-                if str_data == i:
-                    copy_data = data[1:]
-                    child_item = QTreeWidgetItem(parent_item, ["", copy_data[0], copy_data[1]])
-                    self.set_item_color(child_item, copy_data[1])
+        # 创建一个字典来存储每个level的items
+        level_items = {level: [] for level in all_lv}
+
+        # 为每个数据创建item
+        for data in l:
+            str_data = ''.join(data[0])
+            item = QTreeWidgetItem(filter_tree)
+            item.setText(0, str_data)  # level
+            item.setText(1, data[1])   # target
+            item.setText(2, data[2])   # status
+            self.set_item_color(item, data[2])
+            level_items[str_data].append(item)
+
+        # 初始化level展开状态
+        level_expanded = {level: True for level in all_lv}
+
+        # 添加事件过滤器处理点击事件
+        filter_tree.viewport().installEventFilter(FilterTreeEventFilter(filter_tree, level_items, level_expanded))
 
         idx = self.tabwidget.addTab(tab_filter, self.En_search.text())
         self.tabwidget.setCurrentIndex(idx)
@@ -586,10 +594,23 @@ class MonitorRuns(QMainWindow):
             tab_trace = QWidget()
             trace_layout = QVBoxLayout(tab_trace)
             retrace_tree = QTreeWidget()
-            retrace_tree.setColumnCount(3)
-            retrace_tree.setHeaderLabels(["level", "target", "status"])
+            retrace_tree.setColumnCount(5)  # 修改为5列
+            retrace_tree.setHeaderLabels(["level", "target", "status", "start time", "end time"])  # 添加所有列标签
             retrace_tree.setRootIsDecorated(True)
             retrace_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+
+            # 设置列宽和调整模式
+            header = retrace_tree.header()
+            header.setSectionResizeMode(QHeaderView.Interactive)  # 所有列都可以手动调整
+            header.setStretchLastSection(False)  # 最后一列不自动拉伸
+
+            # 设置默认列宽，与主界面保持一致
+            retrace_tree.setColumnWidth(0, 80)   # level列
+            retrace_tree.setColumnWidth(1, 600)  # target列
+            retrace_tree.setColumnWidth(2, 100)  # status列
+            retrace_tree.setColumnWidth(3, 150)  # start time列
+            retrace_tree.setColumnWidth(4, 150)  # end time列
+
             trace_layout.addWidget(retrace_tree)
 
             # 生成retrace_tree数据
@@ -613,22 +634,44 @@ class MonitorRuns(QMainWindow):
                         target_level = re.sub(r"^['\"]|['\"]$", '', target_name).split()
                     target_file = os.path.join(run_dir, 'status', target)
                     target_status = self.get_target_status(target_file)
+                    
+                    # 获取开始和结束时间
+                    tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
+                    start_time, end_time = self.get_start_end_time(tgt_track_file)
+                    
                     str_lv = ''.join(target_level)
                     o.append(str_lv)
-                    d = [target_level, target, target_status]
+                    d = [target_level, target, target_status, start_time, end_time]  # 添加时间信息
                     l.append(d)
 
             all_lv = list(set(o))
             all_lv.sort(key=o.index)
-            for i in all_lv:
-                open_status = True
-                parent_item = QTreeWidgetItem(retrace_tree, [i])
-                for data in l:
-                    str_data = ''.join(data[0])
-                    if str_data == i:
-                        copy_data = data[1:]
-                        child_item = QTreeWidgetItem(parent_item, ["", copy_data[0], copy_data[1]])
-                        self.set_item_color(child_item, copy_data[1])
+
+            # 创建一个字典来存储每个level的items
+            level_items = {level: [] for level in all_lv}
+
+            # 为每个数据创建item
+            for data in l:
+                str_data = ''.join(data[0])
+                item = QTreeWidgetItem(retrace_tree)
+                item.setText(0, str_data)  # level
+                item.setText(1, data[1])   # target
+                item.setText(2, data[2])   # status
+                item.setText(3, data[3])   # start time
+                item.setText(4, data[4])   # end time
+                self.set_item_color(item, data[2])
+                level_items[str_data].append(item)
+
+            # 创建事件过滤器并保存状态
+            event_filter = FilterTreeEventFilter(retrace_tree)
+            event_filter.level_items = level_items
+            event_filter.level_expanded = {level: True for level in all_lv}
+            
+            # 添加事件过滤器
+            retrace_tree.viewport().installEventFilter(event_filter)
+            
+            # 保存事件过滤器的引用，防止被垃圾回收
+            retrace_tree.event_filter = event_filter
 
             idx = self.tabwidget.addTab(tab_trace, self.tar_sel)
             self.tabwidget.setCurrentIndex(idx)
@@ -877,23 +920,13 @@ class MonitorRuns(QMainWindow):
 
     def bt_trace_up(self, item):
         """Trace Up - 显示当前target的上游依赖"""
-        if item and item.text(1):
-            target = item.text(1)
-            try:
-                cmd = f'cd {self.combo_sel} && make -n {target} | grep "^make"'
-                subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f'{cmd}; exec bash'])
-            except Exception as e:
-                pass
+        if item and item.childCount() == 0:  # 确保是叶子节点
+            self.retrace_tab('in')
 
     def bt_trace_down(self, item):
         """Trace Down - 显示依赖于当前target的下游项目"""
-        if item and item.text(1):
-            target = item.text(1)
-            try:
-                cmd = f'cd {self.combo_sel}/make_targets && grep -l "{target}" *.csh'
-                subprocess.Popen(['gnome-terminal', '--', 'bash', '-c', f'{cmd}; exec bash'])
-            except Exception as e:
-                pass
+        if item and item.childCount() == 0:  # 确保是叶子节点
+            self.retrace_tab('out')
 
     def bt_terminal(self, item):
         """Terminal - 执行 XMeta_term 命令"""
@@ -1153,6 +1186,47 @@ class MonitorRuns(QMainWindow):
         level = clicked_item.text(0)
         if level in level_items:
             items = level_items[level]
+            if not items:
+                return
+
+            # 切换展开状态
+            self.level_expanded[level] = not self.level_expanded[level]
+            
+            # 如果是展开状态，显示所有items
+            if self.level_expanded[level]:
+                for item in items:
+                    item.setHidden(False)
+            # 如果是折叠状态，只显示第一个item
+            else:
+                for i, item in enumerate(items):
+                    item.setHidden(i != 0)  # 只有第一个item不隐藏
+
+class FilterTreeEventFilter(QObject):
+    def __init__(self, tree):
+        super().__init__()
+        self.tree = tree
+        self.level_items = {}
+        self.level_expanded = {}
+
+    def eventFilter(self, obj, event):
+        if obj == self.tree.viewport():
+            if event.type() == event.MouseButtonPress:
+                item = self.tree.itemAt(event.pos())
+                if item:
+                    # 获取点击的列
+                    column = self.tree.columnAt(event.x())
+                    # 只有在点击第一列时才触发折叠/展开
+                    if column == 0:
+                        level = item.text(0)
+                        if level in self.level_items:
+                            self.toggle_level_items(level)
+                            return True  # 事件已处理
+        return super().eventFilter(obj, event)
+
+    def toggle_level_items(self, level):
+        """切换level对应的items的展开/折叠状态"""
+        if level in self.level_items:
+            items = self.level_items[level]
             if not items:
                 return
 
