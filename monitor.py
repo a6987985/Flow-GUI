@@ -65,6 +65,9 @@ class MonitorRuns(QMainWindow):
         xmeta_background = os.getenv('XMETA_BACKGROUND', '#ffffff')
         version = os.getenv('XMETA_VERSION', 'Version')
 
+        # 添加level展开状态跟踪
+        self.level_expanded = {}
+
         title_name = "Console of XMeta/%s-%s @ %s" %(version, family, xmeta_project)
         self.setWindowTitle(title_name)
         
@@ -87,7 +90,7 @@ class MonitorRuns(QMainWindow):
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
 
-        # 设置全局背景色
+        # 设置全局背景色和滚动条样式
         self.setStyleSheet("""
             QMainWindow, QWidget {
                 background-color: #F3E5F5;
@@ -111,6 +114,63 @@ class MonitorRuns(QMainWindow):
             }
             QLabel, QComboBox, QLineEdit {
                 color: black;
+            }
+            /* 滚动条整体样式 */
+            QScrollBar:vertical {
+                width: 12px;
+                background: transparent;
+                margin: 2px;
+                border-radius: 6px;
+            }
+            /* 滚动条滑块 */
+            QScrollBar::handle:vertical {
+                background: #CCCCCC;
+                min-height: 30px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #AAAAAA;
+            }
+            /* 滚动条上下按钮 */
+            QScrollBar::add-line:vertical {
+                height: 0px;
+                background: transparent;
+            }
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+                background: transparent;
+            }
+            /* 滚动条背景槽 */
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: #F0F0F0;
+                border-radius: 6px;
+            }
+            /* 水平滚动条样式 */
+            QScrollBar:horizontal {
+                height: 12px;
+                background: transparent;
+                margin: 2px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #CCCCCC;
+                min-width: 30px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #AAAAAA;
+            }
+            QScrollBar::add-line:horizontal {
+                width: 0px;
+                background: transparent;
+            }
+            QScrollBar::sub-line:horizontal {
+                width: 0px;
+                background: transparent;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: #F0F0F0;
+                border-radius: 6px;
             }
         """)
 
@@ -205,6 +265,60 @@ class MonitorRuns(QMainWindow):
         self.tree.setRootIsDecorated(True)
         self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.tree.itemDoubleClicked.connect(self.copy_tar)
+        
+        # 设置滚动条样式
+        self.tree.setStyleSheet("""
+            QTreeWidget {
+                background-color: white;
+                border: none;
+            }
+            QScrollBar:vertical {
+                width: 15px;
+                background-color: transparent;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                min-height: 30px;
+                background: #CCCCCC;
+                margin: 3px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #AAAAAA;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                border: none;
+                background: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+                border: none;
+            }
+            QScrollBar:horizontal {
+                height: 15px;
+                background-color: transparent;
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                min-width: 30px;
+                background: #CCCCCC;
+                margin: 3px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #AAAAAA;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                border: none;
+                background: none;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: none;
+                border: none;
+            }
+        """)
         
         # 设置列宽和调整模式
         header = self.tree.header()
@@ -612,31 +726,39 @@ class MonitorRuns(QMainWindow):
         # 其他列固定宽度
         self.tree.setColumnWidth(2, 100)  # status列
         self.tree.setColumnWidth(3, 150)  # start time列
-        # end time列需要设置宽度，因为已经设置为自动填充
 
-        # 构建树结构
+        # 构建扁平化的树结构
         all_lv = list(set(o))
         all_lv.sort(key=o.index)
 
-        # 初始化
-        init_closed_tag = list(set([i for i in o if o.count(i) >= 5]))
+        # 为每个level创建一个字典来存储其items
+        self.level_items = {level: [] for level in all_lv}
+        
+        # 初始化level展开状态
+        self.level_expanded = {level: True for level in all_lv}
 
-        # 根据level分组
-        level_dict = {}
-        for i in all_lv:
-            open_status = True
-            parent_item = QTreeWidgetItem(self.tree, [i])
-            level_dict[i] = parent_item
-
+        # 创建所有项目
         for data in l:
             lvl, tgt, st, ct, et = data
             str_data = ''.join(lvl)
-            parent_item = level_dict[str_data]
-            child_item = QTreeWidgetItem(parent_item, ["", tgt, st, ct, et])
-            self.set_item_color(child_item, st)
+            
+            # 创建item
+            item = QTreeWidgetItem(self.tree)
+            item.setText(0, str_data)  # level
+            item.setText(1, tgt)       # target
+            item.setText(2, st)        # status
+            item.setText(3, ct)        # start time
+            item.setText(4, et)        # end time
+            
+            # 设置颜色
+            self.set_item_color(item, st)
+            
+            # 将item添加到对应level的列表中
+            self.level_items[str_data].append(item)
 
-        self.tree.expandAll()
-
+        # 使用事件过滤器处理点击事件
+        self.tree.viewport().installEventFilter(self)
+        
         # 恢复状态
         self.restore_tree_state(tree_state)
 
@@ -1009,6 +1131,42 @@ class MonitorRuns(QMainWindow):
             return f"{self.ANSI_BOLD}{self.ANSI_GREEN}{padded_status}{self.ANSI_RESET}"
         else:
             return padded_status
+
+    def eventFilter(self, obj, event):
+        """事件过滤器，处理鼠标点击事件"""
+        if obj == self.tree.viewport():
+            if event.type() == event.MouseButtonPress:
+                item = self.tree.itemAt(event.pos())
+                if item:
+                    # 获取点击的列
+                    column = self.tree.columnAt(event.x())
+                    # 只有在点击第一列时才触发折叠/展开
+                    if column == 0:
+                        level = item.text(0)
+                        if level in self.level_items:
+                            self.toggle_level_items(item, self.level_items)
+                            return True  # 事件已处理
+        return super().eventFilter(obj, event)
+
+    def toggle_level_items(self, clicked_item, level_items):
+        """切换level对应的items的展开/折叠状态"""
+        level = clicked_item.text(0)
+        if level in level_items:
+            items = level_items[level]
+            if not items:
+                return
+
+            # 切换展开状态
+            self.level_expanded[level] = not self.level_expanded[level]
+            
+            # 如果是展开状态，显示所有items
+            if self.level_expanded[level]:
+                for item in items:
+                    item.setHidden(False)
+            # 如果是折叠状态，只显示第一个item
+            else:
+                for i, item in enumerate(items):
+                    item.setHidden(i != 0)  # 只有第一个item不隐藏
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
