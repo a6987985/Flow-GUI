@@ -7,9 +7,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QTabWid
                              QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton, 
                              QStyleFactory, QMenu, QAction, QFileDialog, QMessageBox, QScrollBar,
                              QHeaderView, QStyle, QDialog, QTextEdit, QTabBar, QTreeWidget, QTreeWidgetItem,
-                             QShortcut)  # 添加 QShortcut
-from PyQt5.QtCore import (Qt, QTimer, QRegExp, QObject)  # 将 QKeySequence 移到 QtCore
-from PyQt5.QtGui import (QFont, QBrush, QColor, QClipboard, QIcon, QRegExpValidator, QFontMetrics, QKeySequence)  # 将 QKeySequence 移到 QtGui
+                             QShortcut)
+from PyQt5.QtCore import (Qt, QTimer, QRegExp, QObject, QSize)  # 添加 QSize 到 QtCore 导入
+from PyQt5.QtGui import (QFont, QBrush, QColor, QClipboard, QIcon, QRegExpValidator, QFontMetrics, QKeySequence)
 
 class TreeViewEventFilter(QObject):
     """事件过滤器，处理 TreeView 的展开/折叠"""
@@ -276,6 +276,7 @@ class MonitorRuns(QMainWindow):
         button_layout = QHBoxLayout(button_widget)
         button_layout.setContentsMargins(0,0,0,0)
         button_layout.setSpacing(5)
+        button_layout.addStretch()  # 添加弹性空间，使按钮靠右
 
         # 定义按钮样式
         button_style = """
@@ -285,7 +286,7 @@ class MonitorRuns(QMainWindow):
                 border: none;
                 border-radius: 15px;
                 padding: 8px 16px;
-                min-width: 80px;
+                min-width: 60px;  /* 减小最小宽度 */
                 font-size: 14px;
             }
             QPushButton:hover {
@@ -304,8 +305,10 @@ class MonitorRuns(QMainWindow):
         bt_unskip = QPushButton("unskip")
         bt_invalid = QPushButton("invalid")
         
-        # 应用样式到所有按钮
+        # 设置固定大小并应用样式到所有按钮
+        button_size = QSize(100, 35)  # 设置固定大小
         for button in [bt_runall, bt_run, bt_stop, bt_skip, bt_unskip, bt_invalid]:
+            button.setFixedSize(button_size)  # 应用固定大小
             button.setStyleSheet(button_style)
             button_layout.addWidget(button)
 
@@ -347,12 +350,23 @@ class MonitorRuns(QMainWindow):
         self.tree_view.setAlternatingRowColors(True)
         self.tree_view.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         
-        # 设置列宽
-        self.tree_view.setColumnWidth(0, 80)   # level列
-        self.tree_view.setColumnWidth(1, 600)  # target列
-        self.tree_view.setColumnWidth(2, 100)  # status列
-        self.tree_view.setColumnWidth(3, 150)  # start time列
-        self.tree_view.setColumnWidth(4, 150)  # end time列
+        # 设置列宽和调整模式
+        header = self.tree_view.header()
+        
+        # 先设置每列为Fixed模式
+        header.setSectionResizeMode(0, QHeaderView.Fixed)  # level列
+        header.setSectionResizeMode(1, QHeaderView.Interactive)  # target列
+        header.setSectionResizeMode(2, QHeaderView.Fixed)  # status列
+        header.setSectionResizeMode(3, QHeaderView.Fixed)  # start time列
+        header.setSectionResizeMode(4, QHeaderView.Fixed)  # end time列
+        header.setStretchLastSection(False)  # 最后一列不自动拉伸
+        
+        # 设置初始列宽
+        self.tree_view.setColumnWidth(0, 50)   # level列
+        self.tree_view.setColumnWidth(1, 1000)  # target列
+        self.tree_view.setColumnWidth(2, 80)  # status列
+        self.tree_view.setColumnWidth(3, 200)  # start time列
+        self.tree_view.setColumnWidth(4, 200)  # end time列
 
         # 添加事件过滤器
         self.tree_view_event_filter = TreeViewEventFilter(self.tree_view, self)
@@ -1005,6 +1019,22 @@ class MonitorRuns(QMainWindow):
             level_items_model[str_data].append(current_row)
 
         self.tree_view_event_filter.level_items = level_items_model
+
+        # 重新设置列宽和调整模式
+        header = self.tree_view.header()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)  # level列
+        header.setSectionResizeMode(1, QHeaderView.Interactive)  # target列
+        header.setSectionResizeMode(2, QHeaderView.Fixed)  # status列
+        header.setSectionResizeMode(3, QHeaderView.Fixed)  # start time列
+        header.setSectionResizeMode(4, QHeaderView.Fixed)  # end time列
+        header.setStretchLastSection(False)  # 最后一列不自动拉伸
+        
+        # 重新设置列宽
+        self.tree_view.setColumnWidth(0, 50)   # level列
+        self.tree_view.setColumnWidth(1, 600)  # target列，调小一些
+        self.tree_view.setColumnWidth(2, 80)   # status列
+        self.tree_view.setColumnWidth(3, 200)  # start time列
+        self.tree_view.setColumnWidth(4, 200)  # end time列
 
     def set_item_color(self, item, status):
         if status in self.colors:
