@@ -1447,14 +1447,11 @@ class MonitorRuns(QMainWindow):
             }
         """)
         
-        # 添加与主tab相同的菜单项
+        # 只添加基本操作菜单项，移除 Trace Up 和 Trace Down
         terminal_action = context_menu.addAction("Terminal")
         csh_action = context_menu.addAction("csh")
         log_action = context_menu.addAction("Log")
         cmd_action = context_menu.addAction("cmd")
-        context_menu.addSeparator()
-        trace_up_action = context_menu.addAction("Trace Up")
-        trace_down_action = context_menu.addAction("Trace Down")
         
         def cleanup_menu():
             self.context_menu_active = False
@@ -1477,10 +1474,6 @@ class MonitorRuns(QMainWindow):
             self.bt_log(mock_item)
         elif action == cmd_action:
             self.bt_cmd(mock_item)
-        elif action == trace_up_action:
-            self.bt_trace_up(mock_item)
-        elif action == trace_down_action:
-            self.bt_trace_down(mock_item)
 
     def is_run_directory(self, dir_path):
         """检查是否为有效的 run 目录"""
@@ -1584,34 +1577,67 @@ class MonitorRuns(QMainWindow):
         
         if not target:
             return
+            
+        # 创建上下文菜单
+        context_menu = QMenu()
+        context_menu.setStyleSheet(self.context_menu.styleSheet())
         
-        # 重新连接菜单项的信号
-        for action in self.context_menu.actions():
-            try:
-                action.triggered.disconnect()
-            except:
-                pass
+        # 添加基本菜单项
+        terminal_action = context_menu.addAction("Terminal")
+        csh_action = context_menu.addAction("csh")
+        log_action = context_menu.addAction("Log")
+        cmd_action = context_menu.addAction("cmd")
+        context_menu.addSeparator()
         
-        # 连接动作到处理函数
-        for action in self.context_menu.actions():
-            if action.text() == "Terminal":
-                action.triggered.connect(lambda: (self.Xterm(), self.context_menu.close()))
-            elif action.text() == "csh":
-                action.triggered.connect(lambda: (self.bt_csh_for_model(index), self.context_menu.close()))
-            elif action.text() == "Log":
-                action.triggered.connect(lambda: (self.bt_log_for_model(index), self.context_menu.close()))
-            elif action.text() == "cmd":
-                action.triggered.connect(lambda: (self.bt_cmd_for_model(index), self.context_menu.close()))
-            elif action.text() == "Trace Up":
-                action.triggered.connect(lambda: (self.bt_trace_up_for_model(index), self.context_menu.close()))
-            elif action.text() == "Trace Down":
-                action.triggered.connect(lambda: (self.bt_trace_down_for_model(index), self.context_menu.close()))
+        # 检查是否存在 nlib 文件，如果存在则添加 Open nlib 菜单项
+        open_nlib_action = None
+        nlib_path = None
+        if target.startswith('I2'):
+            # 尝试两种可能的 nlib 文件名
+            nlib_name1 = target[2:] + '.nlib'  # 去掉 I2 的情况
+            nlib_name2 = target + '.nlib'      # 完整 target 名的情况
+            nlib_path1 = os.path.join(self.combo_sel, 'data', nlib_name1)
+            nlib_path2 = os.path.join(self.combo_sel, 'data', nlib_name2)
+            
+            if os.path.exists(nlib_path1):
+                nlib_path = nlib_path1
+            elif os.path.exists(nlib_path2):
+                nlib_path = nlib_path2
+                
+            if nlib_path:
+                open_nlib_action = context_menu.addAction("Open nlib")
+                context_menu.addSeparator()
+        
+        trace_up_action = context_menu.addAction("Trace Up")
+        trace_down_action = context_menu.addAction("Trace Down")
         
         def cleanup_menu():
             self.context_menu_active = False
         
-        self.context_menu.aboutToHide.connect(cleanup_menu)
-        self.context_menu.popup(view.viewport().mapToGlobal(position))
+        context_menu.aboutToHide.connect(cleanup_menu)
+        
+        # 显示菜单
+        action = context_menu.exec_(view.viewport().mapToGlobal(position))
+        
+        # 处理菜单动作
+        if action == terminal_action:
+            self.Xterm()
+        elif action == csh_action:
+            self.bt_csh_for_model(index)
+        elif action == log_action:
+            self.bt_log_for_model(index)
+        elif action == cmd_action:
+            self.bt_cmd_for_model(index)
+        elif open_nlib_action and action == open_nlib_action:
+            try:
+                cmd = f"XMeta_icc2 {nlib_path}"
+                subprocess.Popen(cmd, shell=True)
+            except subprocess.SubprocessError as e:
+                print(f"Error opening nlib: {e}")
+        elif action == trace_up_action:
+            self.bt_trace_up_for_model(index)
+        elif action == trace_down_action:
+            self.bt_trace_down_for_model(index)
 
     def bt_csh_for_model(self, index):
         """为 Model 视图处理 csh 命令"""
@@ -1676,8 +1702,8 @@ class MonitorRuns(QMainWindow):
         if not index.isValid():
             return
             
-        target_index = self.model.index(index.row(), 1)
-        self.tar_sel = self.model.data(target_index)
+        target_index = index.model().index(index.row(), 1)  # 1 是 target 列
+        self.tar_sel = index.model().data(target_index)
         if self.tar_sel:
             self.retrace_tab('in')
     
@@ -1686,8 +1712,8 @@ class MonitorRuns(QMainWindow):
         if not index.isValid():
             return
             
-        target_index = self.model.index(index.row(), 1)
-        self.tar_sel = self.model.data(target_index)
+        target_index = index.model().index(index.row(), 1)  # 1 是 target 列
+        self.tar_sel = index.model().data(target_index)
         if self.tar_sel:
             self.retrace_tab('out')
 
@@ -1707,6 +1733,7 @@ class MonitorRuns(QMainWindow):
                     end_time_index = model.index(row, 4)
                     model.setData(start_time_index, start_time)
                     model.setData(end_time_index, end_time)
+                    
                     # 清除所有列的背景色
                     for col in range(model.columnCount()):
                         model.item(row, col).setBackground(QBrush())
@@ -1714,6 +1741,7 @@ class MonitorRuns(QMainWindow):
                     if new_status in self.colors:
                         color = QColor(self.colors[new_status])
                         for col in range(model.columnCount()):
+                            col_index = model.index(row, col)
                             model.item(row, col).setBackground(QBrush(color))
 
     def update_status_and_time(self, run_dir, tree_widget, tree_view):
