@@ -271,16 +271,6 @@ class MonitorRuns(QMainWindow):
         self.gen_combo = ComboFrame(main_widget, self.MenuFrame)
         menu_layout.addWidget(self.gen_combo)
 
-        # 中间部分 - Filter
-        filter_widget = QWidget()
-        filter_layout = QHBoxLayout(filter_widget)
-        filter_layout.setContentsMargins(0,0,0,0)
-        self.En_search = QLineEdit()
-        lb_filter = QLabel("Filter:")
-        filter_layout.addWidget(lb_filter)
-        filter_layout.addWidget(self.En_search)
-        menu_layout.addWidget(filter_widget)
-
         # 右边部分 - 按钮组
         button_widget = QWidget()
         button_layout = QHBoxLayout(button_widget)
@@ -322,10 +312,9 @@ class MonitorRuns(QMainWindow):
         # 将按钮组添加到主菜单布局
         menu_layout.addWidget(button_widget)
 
-        # 设置伸缩因子，使三个部分合理分布
+        # 设置伸缩因子，使两个部分合理分布
         menu_layout.setStretch(0, 1)  # ComboFrame
-        menu_layout.setStretch(1, 1)  # Filter
-        menu_layout.setStretch(2, 2)  # Buttons
+        menu_layout.setStretch(1, 2)  # Buttons
 
         # 将MenuFrame添加到主布局
         main_layout.addWidget(self.MenuFrame)
@@ -374,7 +363,6 @@ class MonitorRuns(QMainWindow):
 
         # 信号槽连接
         self.gen_combo.combobox.currentIndexChanged.connect(self.click_event)
-        self.En_search.returnPressed.connect(self.get_entry)
         self.tree_view.doubleClicked.connect(self.copy_tar_from_model)
         
         # 设置右键菜单
@@ -555,7 +543,9 @@ class MonitorRuns(QMainWindow):
                         model.setData(model.index(row, 4), end_time)
 
     def get_entry(self):
-        self.filter_tab()
+        """保留方法但暂时不使用"""
+        pass
+        # self.filter_tab()  # 注释掉，保留方法
 
     def copy_tar(self):
         # 将选中target拷贝到剪贴板
@@ -723,162 +713,17 @@ class MonitorRuns(QMainWindow):
                 pass
 
     def get_filter_target(self):
-        pattern = self.En_search.text()
-        # 原逻辑中使用正则从tar_name中筛选
-        add_wildcard = '*' + pattern + '*'
-        wildcard_replace = add_wildcard.replace('*', '.*')
-        input_pattern = re.compile(wildcard_replace + '$')
-        self.matched_list = [e for e in self.tar_name if input_pattern.match(e)]
+        """保留方法但暂时不使用"""
+        pass
+        # pattern = self.En_search.text()
+        # ... 保留其余代码但暂时注释掉
 
     def filter_tab(self):
-        if not self.En_search.text().strip():
-            return
-        tab_filter = QWidget()
-        tab_filter_layout = QVBoxLayout(tab_filter)
-        
-        # 创建水平布局来放置两个树
-        filter_layout = QHBoxLayout()
-        
-        # 创建过滤后的 TreeWidget
-        filter_tree = QTreeWidget()
-        filter_tree.setColumnCount(5)  # 修改为5列
-        filter_tree.setHeaderLabels(["level", "target", "status", "start time", "end time"])  # 添加所有列标签
-        filter_tree.setRootIsDecorated(True)
-        filter_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
-        filter_tree.itemDoubleClicked.connect(self.copy_tar)
-        
-        # 创建过滤后的 Model 和 TreeView
-        filter_model = QtGui.QStandardItemModel()
-        filter_model.setHorizontalHeaderLabels(["level", "target", "status", "start time", "end time"])
-        
-        filter_tree_view = QtWidgets.QTreeView()
-        filter_tree_view.setModel(filter_model)
-        filter_tree_view.setSelectionMode(QtWidgets.QTreeView.ExtendedSelection)
-        filter_tree_view.setRootIsDecorated(True)
-        filter_tree_view.setAlternatingRowColors(True)
-        filter_tree_view.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)  # 禁用编辑
-        
-        # 设置列宽
-        filter_tree_view.setColumnWidth(0, 80)   # level列
-        filter_tree_view.setColumnWidth(1, 600)  # target列
-        filter_tree_view.setColumnWidth(2, 100)  # status列
-        filter_tree_view.setColumnWidth(3, 150)  # start time列
-        filter_tree_view.setColumnWidth(4, 150)  # end time列
-        
-        # 添加到布局
-        filter_layout.addWidget(filter_tree)
-        filter_layout.addWidget(filter_tree_view)
-        tab_filter_layout.addLayout(filter_layout)
-
-        self.get_filter_target()
-        # 生成filter_tree数据
-        l = []
-        o = []
-        with open(os.path.join(self.combo_sel, '.target_dependency.csh'), 'r') as f:
-            a_file = f.read()
-            for target in self.matched_list:
-                level_name = 'TARGET_LEVEL_%s' %target
-                match_lv = re.search(r'set\s*(%s)\s*\=(\s.*)' %level_name, a_file)
-                if not match_lv:
-                    continue
-                target_name = match_lv.group(2).strip()
-                if re.match(r"^(['\"]).*\"$", target_name):
-                    target_level = re.sub(r"^['\"]|['\"]$", '', target_name).split()
-
-                target_file = os.path.join(self.combo_sel, 'status', target)
-                target_status = self.get_target_status(target_file)
-                
-                # 获取时间信息
-                tgt_track_file = os.path.join(self.combo_sel, 'logs/targettracker', target)
-                start_time, end_time = self.get_start_end_time(tgt_track_file)
-                
-                str_lv = ''.join(target_level)
-                o.append(str_lv)
-                d = [target_level, target, target_status, start_time, end_time]
-                l.append(d)
-
-        all_lv = list(set(o))
-        all_lv.sort(key=o.index)
-
-        # 创建一个字典来存储每个level的items
-        level_items = {level: [] for level in all_lv}
-        level_items_model = {level: [] for level in all_lv}
-
-        # 为每个数据创建item
-        for data in l:
-            str_data = ''.join(data[0])
-            
-            # 创建 TreeWidget 项
-            item = QTreeWidgetItem(filter_tree)
-            item.setText(0, str_data)  # level
-            item.setText(1, data[1])   # target
-            item.setText(2, data[2])   # status
-            item.setText(3, data[3])   # start time
-            item.setText(4, data[4])   # end time
-            self.set_item_color(item, data[2])
-            level_items[str_data].append(item)
-            
-            # 创建 Model 项
-            model_items = []
-            model_items.append(QtGui.QStandardItem(str_data))  # level
-            model_items.append(QtGui.QStandardItem(data[1]))   # target
-            model_items.append(QtGui.QStandardItem(data[2]))   # status
-            model_items.append(QtGui.QStandardItem(data[3]))   # start time
-            model_items.append(QtGui.QStandardItem(data[4]))   # end time
-            
-            # 设置每个项目为不可编辑
-            for item in model_items:
-                item.setEditable(False)
-            
-            # 设置 Model 项的颜色
-            if data[2] in self.colors:
-                color = QColor(self.colors[data[2]])
-                for item in model_items:
-                    item.setBackground(QBrush(color))
-            
-            # 将 Model 项添加到 Model
-            current_row = filter_model.rowCount()
-            filter_model.appendRow(model_items)
-            level_items_model[str_data].append(current_row)
-
-        # 为每个level的第一个item设置展开/折叠指示器
-        for level, items in level_items.items():
-            if items:
-                first_item = items[0]
-                first_item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
-                first_item.setExpanded(True)
-                first_item.setFlags(first_item.flags() | Qt.ItemIsTristate)
-
-        # 创建并设置事件过滤器
-        tree_event_filter = FilterTreeEventFilter(filter_tree)
-        tree_event_filter.level_items = level_items
-        tree_event_filter.level_expanded = {level: True for level in all_lv}
-        filter_tree.viewport().installEventFilter(tree_event_filter)
-        
-        view_event_filter = TreeViewEventFilter(filter_tree_view, self)
-        view_event_filter.level_items = level_items_model
-        view_event_filter.level_expanded = {level: True for level in all_lv}
-        filter_tree_view.viewport().installEventFilter(view_event_filter)
-        
-        # 添加右键菜单
-        filter_tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
-        filter_tree_view.customContextMenuRequested.connect(
-            lambda pos: self.show_context_menu_for_view(pos, filter_tree_view)
-        )
-        
-        # 添加双击复制功能
-        filter_tree_view.doubleClicked.connect(self.copy_tar_from_model)
-        
-        # 添加选择同步
-        filter_tree.itemSelectionChanged.connect(
-            lambda: self.sync_filter_selection_from_tree(filter_tree, filter_tree_view, filter_model)
-        )
-        filter_tree_view.selectionModel().selectionChanged.connect(
-            lambda selected, deselected: self.sync_filter_selection_from_view(selected, deselected, filter_tree, filter_model)
-        )
-
-        idx = self.tabwidget.addTab(tab_filter, self.En_search.text())
-        self.tabwidget.setCurrentIndex(idx)
+        """保留方法但暂时不使用"""
+        pass
+        # if not self.En_search.text().strip():
+        #     return
+        # ... 保留其余代码但暂时注释掉
 
     def sync_filter_selection_from_tree(self, tree, tree_view, model):
         """从过滤 TreeWidget 同步选择到过滤 TreeView"""
