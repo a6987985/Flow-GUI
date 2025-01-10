@@ -6,9 +6,10 @@ from PyQt5 import QtGui, QtCore, QtWidgets
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QTabWidget, 
                              QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton, 
                              QStyleFactory, QMenu, QAction, QFileDialog, QMessageBox, QScrollBar,
-                             QHeaderView, QStyle, QDialog, QTextEdit, QTabBar, QTreeWidget, QTreeWidgetItem)
-from PyQt5.QtCore import (Qt, QTimer, QRegExp, QObject)
-from PyQt5.QtGui import (QFont, QBrush, QColor, QClipboard, QIcon, QRegExpValidator, QFontMetrics)
+                             QHeaderView, QStyle, QDialog, QTextEdit, QTabBar, QTreeWidget, QTreeWidgetItem,
+                             QShortcut)  # 添加 QShortcut
+from PyQt5.QtCore import (Qt, QTimer, QRegExp, QObject)  # 将 QKeySequence 移到 QtCore
+from PyQt5.QtGui import (QFont, QBrush, QColor, QClipboard, QIcon, QRegExpValidator, QFontMetrics, QKeySequence)  # 将 QKeySequence 移到 QtGui
 
 class TreeViewEventFilter(QObject):
     """事件过滤器，处理 TreeView 的展开/折叠"""
@@ -406,6 +407,17 @@ class MonitorRuns(QMainWindow):
         self.create_menu()
 
         self.context_menu_active = False
+
+        # 初始化搜索对话框
+        self.search_dialog = SearchDialog(self)
+        self.search_dialog.search_box.returnPressed.connect(self.search_in_code)
+        # 移除这两行，不再使用 clicked 信号
+        # self.search_dialog.prev_button.clicked.connect(lambda: self.navigate_search_results(-1))
+        # self.search_dialog.next_button.clicked.connect(lambda: self.navigate_search_results(1))
+        
+        # 添加快捷键
+        self.shortcut_search = QShortcut(QKeySequence("Ctrl+F"), self)
+        self.shortcut_search.activated.connect(self.toggle_search_dialog)
 
     def center(self):
         qr = self.frameGeometry()
@@ -1816,6 +1828,248 @@ class MonitorRuns(QMainWindow):
             # 复制到剪贴板
             clipboard = QApplication.clipboard()
             clipboard.setText(target)
+
+    def search_in_code(self):
+        """在当前显示的代码中搜索"""
+        search_text = self.search_dialog.search_box.text()
+        if not search_text:
+            return
+
+        # 获取当前活动的标签页
+        current_tab = self.tabwidget.currentWidget()
+        if not current_tab:
+            return
+
+        # 获取当前标签页中的树视图
+        tree_view = None
+        if current_tab == self.tab_run:
+            tree_view = self.tree_view
+        else:
+            # 在当前标签页中查找树视图
+            tree_views = current_tab.findChildren(QtWidgets.QTreeView)
+            if tree_views:
+                tree_view = tree_views[0]
+
+        if not tree_view or not tree_view.model():
+            return
+
+        # 清除之前的搜索结果
+        self.search_results = []
+        self.current_result = -1
+
+        # 在树视图中搜索
+        model = tree_view.model()
+        for row in range(model.rowCount()):
+            for col in range(model.columnCount()):
+                index = model.index(row, col)
+                text = str(model.data(index))
+                if search_text.lower() in text.lower():
+                    self.search_results.append(index)
+
+        # 更新搜索结果计数
+        total = len(self.search_results)
+        self.search_dialog.count_label.setText(f"0/{total}")
+
+        # 如果有结果，跳转到第一个
+        if self.search_results:
+            self.navigate_search_results(1)
+
+    def navigate_search_results(self, direction):
+        """在搜索结果中导航
+        direction: 1 表示下一个，-1 表示上一个
+        """
+        if not hasattr(self, 'search_results') or not self.search_results:
+            return
+
+        total = len(self.search_results)
+        if direction > 0:
+            self.current_result = (self.current_result + 1) % total
+        else:
+            self.current_result = (self.current_result - 1) % total
+
+        # 获取当前活动的标签页中的树视图
+        current_tab = self.tabwidget.currentWidget()
+        tree_view = None
+        if current_tab == self.tab_run:
+            tree_view = self.tree_view
+        else:
+            # 在当前标签页中查找树视图
+            tree_views = current_tab.findChildren(QtWidgets.QTreeView)
+            if tree_views:
+                tree_view = tree_views[0]
+
+        if not tree_view:
+            return
+
+        # 更新计数显示
+        self.search_dialog.count_label.setText(f"{self.current_result + 1}/{total}")
+
+        # 跳转到当前结果
+        current_index = self.search_results[self.current_result]
+        tree_view.setCurrentIndex(current_index)
+        tree_view.scrollTo(current_index)
+        
+        # 高亮显示当前结果
+        tree_view.setFocus()
+        tree_view.selectionModel().select(current_index, QtCore.QItemSelectionModel.ClearAndSelect)
+
+    def eventFilter(self, obj, event):
+        """事件过滤器，处理 ESC 键"""
+        if obj == self.code_search and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self.hide_search_widget()
+                return True
+        return super().eventFilter(obj, event)
+    
+    def toggle_search_widget(self):
+        """切换搜索框的显示/隐藏状态"""
+        if self.search_widget.isHidden():
+            self.search_widget.show()
+            self.code_search.setFocus()  # 显示时自动获取焦点
+            self.code_search.selectAll()  # 选中所有文本
+        else:
+            self.hide_search_widget()
+    
+    def hide_search_widget(self):
+        """隐藏搜索框"""
+        self.search_widget.hide()
+        # 将焦点返回给树视图
+        current_tab = self.tabwidget.currentWidget()
+        if current_tab == self.tab_run:
+            self.tree_view.setFocus()
+        else:
+            tree_views = current_tab.findChildren(QtWidgets.QTreeView)
+            if tree_views:
+                tree_views[0].setFocus()
+
+    def toggle_search_dialog(self):
+        """切换搜索对话框的显示/隐藏状态"""
+        if self.search_dialog.isHidden():
+            self.search_dialog.show()
+            self.search_dialog.search_box.setFocus()
+            self.search_dialog.search_box.selectAll()
+        else:
+            self.search_dialog.hide()
+
+class SearchDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)  # 无边框窗口
+        
+        # 设置背景色和边框
+        self.setStyleSheet("""
+            QDialog {
+                background-color: white;
+                border: 1px solid #C0C0C0;
+                border-radius: 5px;
+            }
+        """)
+        
+        # 创建布局
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        # 搜索框
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search in code...")
+        self.search_box.setMinimumWidth(200)
+        
+        # 搜索结果计数标签
+        self.count_label = QLabel("0/0")
+        self.count_label.setFixedWidth(50)
+        
+        # 导航按钮
+        self.prev_button = QPushButton("↑")
+        self.next_button = QPushButton("↓")
+        self.prev_button.setFixedWidth(30)
+        self.next_button.setFixedWidth(30)
+        
+        # 添加到布局
+        layout.addWidget(self.search_box)
+        layout.addWidget(self.count_label)
+        layout.addWidget(self.prev_button)
+        layout.addWidget(self.next_button)
+        
+        # 安装事件过滤器处理ESC键
+        self.search_box.installEventFilter(self)
+        
+        # 创建定时器用于长按连续触发
+        self.repeat_timer = QTimer()
+        self.repeat_timer.setInterval(100)  # 设置重复间隔为100毫秒
+        self.repeat_timer.timeout.connect(self.handle_button_repeat)
+        
+        # 记录当前按下的按钮和方向
+        self.current_button = None
+        self.current_direction = 0
+        self.is_long_press = False  # 标记是否为长按
+        self.press_time = 0  # 记录按下时间
+        
+        # 为按钮添加事件过滤器
+        self.prev_button.installEventFilter(self)
+        self.next_button.installEventFilter(self)
+        
+    def eventFilter(self, obj, event):
+        if obj == self.search_box and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self.hide()
+                return True
+        elif obj in (self.prev_button, self.next_button):
+            if event.type() == QtCore.QEvent.MouseButtonPress:
+                direction = -1 if obj == self.prev_button else 1
+                self.handle_button_press(obj, direction)
+                return True
+            elif event.type() == QtCore.QEvent.MouseButtonRelease:
+                self.handle_button_release()
+                return True
+        return super().eventFilter(obj, event)
+        
+    def handle_button_press(self, button, direction):
+        """处理按钮按下事件"""
+        self.current_button = button
+        self.current_direction = direction
+        self.is_long_press = False
+        self.press_time = time.time()
+        
+        # 立即触发一次
+        if hasattr(self.parent(), 'navigate_search_results'):
+            self.parent().navigate_search_results(direction)
+            
+        # 启动定时器，延迟800毫秒后开始连续触发
+        QTimer.singleShot(800, self.start_repeat_timer)
+        
+    def handle_button_release(self):
+        """处理按钮释放事件"""
+        release_time = time.time()
+        # 如果不是长按且按下时间小于200毫秒，不触发额外的点击
+        if not self.is_long_press and (release_time - self.press_time) < 0.2:
+            pass
+        
+        self.repeat_timer.stop()
+        self.current_button = None
+        self.current_direction = 0
+        self.is_long_press = False
+        
+    def start_repeat_timer(self):
+        """开始连续触发定时器"""
+        if self.current_button and self.current_button.isDown():
+            self.is_long_press = True
+            self.repeat_timer.start()
+            
+    def handle_button_repeat(self):
+        """处理定时器触发的重复事件"""
+        if self.current_button and self.current_button.isDown() and self.is_long_press:
+            if hasattr(self.parent(), 'navigate_search_results'):
+                self.parent().navigate_search_results(self.current_direction)
+
+    def showEvent(self, event):
+        # 在父窗口中央显示
+        parent = self.parent()
+        if parent:
+            geometry = parent.geometry()
+            x = geometry.x() + (geometry.width() - self.width()) // 2
+            y = geometry.y() + 80  # 距离顶部80像素
+            self.move(x, y)
+        super().showEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
