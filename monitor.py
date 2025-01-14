@@ -2,12 +2,65 @@ import os, sys, re, threading, time
 import subprocess
 from datetime import datetime
 
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QTabWidget, QTreeWidget, QTreeWidgetItem,
+from PyQt5 import QtGui, QtCore, QtWidgets
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QTabWidget, 
                              QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton, 
-                             QStyleFactory, QMenu, QAction, QFileDialog, QMessageBox, QScrollBar, QTreeWidgetItemIterator,
-                             QHeaderView, QStyle, QDialog, QTextEdit, QTabBar)
-from PyQt5.QtCore import (Qt, QTimer, QRegExp, QObject)
-from PyQt5.QtGui import (QFont, QBrush, QColor, QClipboard, QIcon, QRegExpValidator, QFontMetrics)
+                             QStyleFactory, QMenu, QAction, QFileDialog, QMessageBox, QScrollBar,
+                             QHeaderView, QStyle, QDialog, QTextEdit, QTabBar, QTreeWidget, QTreeWidgetItem,
+                             QShortcut)
+from PyQt5.QtCore import (Qt, QTimer, QRegExp, QObject, QSize)  # 添加 QSize 到 QtCore 导入
+from PyQt5.QtGui import (QFont, QBrush, QColor, QClipboard, QIcon, QRegExpValidator, QFontMetrics, QKeySequence)
+
+class TreeViewEventFilter(QObject):
+    """事件过滤器，处理 TreeView 的展开/折叠"""
+    def __init__(self, tree_view, parent):
+        super().__init__()
+        self.tree_view = tree_view
+        self.parent = parent
+        self.level_expanded = {}
+        self.level_items = {}
+
+    def eventFilter(self, obj, event):
+        if obj == self.tree_view.viewport():
+            if event.type() == event.MouseButtonPress:
+                index = self.tree_view.indexAt(event.pos())
+                if index.isValid():
+                    # 获取点击的列
+                    column = self.tree_view.columnAt(event.x())
+                    # 只有在点击第一列时才触发折叠/展开
+                    if column == 0:
+                        # 获取点击的项
+                        model = self.tree_view.model()
+                        item = model.itemFromIndex(model.index(index.row(), 0))
+                        
+                        # 如果项目有子节点，切换其展开状态
+                        if item and item.hasChildren():
+                            is_expanded = self.tree_view.isExpanded(index)
+                            if is_expanded:
+                                self.tree_view.collapse(index)
+                            else:
+                                self.tree_view.expand(index)
+                            return True
+        return super().eventFilter(obj, event)
+
+    def toggle_level_items(self, level):
+        """切换level对应的items的显示/隐藏状态"""
+        if level not in self.level_items:
+            return
+            
+        # 切换展开状态
+        self.level_expanded[level] = not self.level_expanded.get(level, True)
+        
+        # 遍历所有相同level的行
+        rows = self.level_items[level]
+        if not rows:
+            return
+            
+        # 第一个项目始终显示，其他项目根据展开状态显示/隐藏
+        for i, row in enumerate(rows):
+            if i == 0:  # 第一个项目
+                continue
+            self.tree_view.setRowHidden(row, QtCore.QModelIndex(), not self.level_expanded[level])
 
 class ComboFrame(QWidget):
     '''A simple Combobox widget, contains all runs name.'''
@@ -55,6 +108,47 @@ class ComboFrame(QWidget):
         self.new_list.sort(key=self.all_runs.index)
         return self.new_list
 
+class FilterTreeEventFilter(QObject):
+    def __init__(self, tree):
+        super().__init__()
+        self.tree = tree
+        self.level_items = {}
+        self.level_expanded = {}
+
+    def eventFilter(self, obj, event):
+        if obj == self.tree.viewport():
+            if event.type() == event.MouseButtonPress:
+                item = self.tree.itemAt(event.pos())
+                if item:
+                    # 获取点击的列
+                    column = self.tree.columnAt(event.x())
+                    # 只有在点击第一列时才触发折叠/展开
+                    if column == 0:
+                        level = item.text(0)
+                        if level in self.level_items:
+                            self.toggle_level_items(level)
+                            return True  # 事件已处理
+        return super().eventFilter(obj, event)
+ 
+    def toggle_level_items(self, level):
+        """切换level对应的items的展开/折叠状态"""
+        if level not in self.level_items:
+            return
+            
+        # 切换展开状态
+        self.level_expanded[level] = not self.level_expanded.get(level, True)
+        
+        # 遍历所有相同 level 的行
+        rows = self.level_items[level]
+        if not rows:
+            return
+            
+        # 第一个项目始终显示，其他项目根据展开状态显示/隐藏
+        for i, row in enumerate(rows):
+            if i == 0:  # 第一个项目
+                continue
+            self.tree.setRowHidden(row, QtCore.QModelIndex(), not self.level_expanded[level])
+   
 class MonitorRuns(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -83,7 +177,7 @@ class MonitorRuns(QMainWindow):
         }
         
         # 创建菜单栏
-        self.create_menu()
+        # self.create_menu()
         
         # 主部件
         main_widget = QWidget()
@@ -184,21 +278,12 @@ class MonitorRuns(QMainWindow):
         self.gen_combo = ComboFrame(main_widget, self.MenuFrame)
         menu_layout.addWidget(self.gen_combo)
 
-        # 中间部分 - Filter
-        filter_widget = QWidget()
-        filter_layout = QHBoxLayout(filter_widget)
-        filter_layout.setContentsMargins(0,0,0,0)
-        self.En_search = QLineEdit()
-        lb_filter = QLabel("Filter:")
-        filter_layout.addWidget(lb_filter)
-        filter_layout.addWidget(self.En_search)
-        menu_layout.addWidget(filter_widget)
-
         # 右边部分 - 按钮组
         button_widget = QWidget()
         button_layout = QHBoxLayout(button_widget)
         button_layout.setContentsMargins(0,0,0,0)
         button_layout.setSpacing(5)
+        button_layout.addStretch()  # 添加弹性空间，使按钮靠右
 
         # 定义按钮样式
         button_style = """
@@ -206,9 +291,9 @@ class MonitorRuns(QMainWindow):
                 background-color: #6B5B95;
                 color: white;
                 border: none;
-                border-radius: 14px;
-                padding: 6px 16px;
-                min-width: 40px;
+                border-radius: 15px;
+                padding: 8px 16px;
+                min-width: 60px;  /* 减小最小宽度 */
                 font-size: 14px;
             }
             QPushButton:hover {
@@ -227,18 +312,19 @@ class MonitorRuns(QMainWindow):
         bt_unskip = QPushButton("unskip")
         bt_invalid = QPushButton("invalid")
         
-        # 应用样式到所有按钮
+        # 设置固定大小并应用样式到所有按钮
+        button_size = QSize(100, 35)  # 设置固定大小
         for button in [bt_runall, bt_run, bt_stop, bt_skip, bt_unskip, bt_invalid]:
+            button.setFixedSize(button_size)  # 应用固定大小
             button.setStyleSheet(button_style)
             button_layout.addWidget(button)
 
         # 将按钮组添加到主菜单布局
         menu_layout.addWidget(button_widget)
 
-        # 设置伸缩因子，使三个部分合理分布
+        # 设置伸缩因子，使两个部分合理分布
         menu_layout.setStretch(0, 1)  # ComboFrame
-        menu_layout.setStretch(1, 1)  # Filter
-        menu_layout.setStretch(2, 2)  # Buttons
+        menu_layout.setStretch(1, 2)  # Buttons
 
         # 将MenuFrame添加到主布局
         main_layout.addWidget(self.MenuFrame)
@@ -257,86 +343,54 @@ class MonitorRuns(QMainWindow):
         self.tab_run = QWidget()
         tab_run_layout = QVBoxLayout(self.tab_run)
         idx = self.tabwidget.addTab(self.tab_run, self.gen_combo.combobox.currentText())
-        self.tabwidget.tabBar().setTabButton(idx, QTabBar.RightSide, None)  # 移除主tab的关闭按钮
+        self.tabwidget.tabBar().setTabButton(idx, QTabBar.RightSide, None)
 
-        # Treeview
-        self.tree = QTreeWidget()
-        self.tree.setColumnCount(5)
-        self.tree.setHeaderLabels(["level", "target", "status", "start time", "end time"])
-        self.tree.setRootIsDecorated(True)
-        self.tree.setSelectionMode(QTreeWidget.ExtendedSelection)
-        self.tree.itemDoubleClicked.connect(self.copy_tar)
+        # 创建 Model 和 TreeView
+        self.model = QtGui.QStandardItemModel()
+        self.model.setHorizontalHeaderLabels(["level", "target", "status", "start time", "end time"])
         
-        # 设置滚动条样式
-        self.tree.setStyleSheet("""
-            QTreeWidget {
-                background-color: white;
-                border: none;
-            }
-            QScrollBar:vertical {
-                width: 15px;
-                background-color: transparent;
-                margin: 0px;
-            }
-            QScrollBar::handle:vertical {
-                min-height: 30px;
-                background: #CCCCCC;
-                margin: 3px;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #AAAAAA;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-                border: none;
-                background: none;
-            }
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-                background: none;
-                border: none;
-            }
-            QScrollBar:horizontal {
-                height: 15px;
-                background-color: transparent;
-                margin: 0px;
-            }
-            QScrollBar::handle:horizontal {
-                min-width: 30px;
-                background: #CCCCCC;
-                margin: 3px;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:horizontal:hover {
-                background: #AAAAAA;
-            }
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-                width: 0px;
-                border: none;
-                background: none;
-            }
-            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-                background: none;
-                border: none;
-            }
-        """)
+        # TreeView
+        self.tree_view = QtWidgets.QTreeView()
+        self.tree_view.setModel(self.model)
+        self.tree_view.setSelectionMode(QtWidgets.QTreeView.ExtendedSelection)
+        self.tree_view.setRootIsDecorated(True)  # 显示展开/折叠图标
+        self.tree_view.setItemsExpandable(True)  # 允许展开/折叠
+        self.tree_view.setAlternatingRowColors(True)
+        self.tree_view.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.tree_view.setIndentation(20)  # 设置缩进值
         
         # 设置列宽和调整模式
-        header = self.tree.header()
-        header.setStretchLastSection(True)  # 让最后一列填充剩余空间
+        header = self.tree_view.header()
         
-        # 设置各列的调整模式
-        header.setSectionResizeMode(0, QHeaderView.Fixed)  # level列固定宽度
-        header.setSectionResizeMode(1, QHeaderView.Interactive)  # target列可手动调整
-        header.setSectionResizeMode(2, QHeaderView.Fixed)  # status列固定宽度
-        header.setSectionResizeMode(3, QHeaderView.Fixed)  # start time列固定宽度
-        header.setSectionResizeMode(4, QHeaderView.Stretch)  # end time列自动填充剩余空间
+        # 先设置每列为Fixed模式
+        header.setSectionResizeMode(0, QHeaderView.Fixed)  # level列
+        header.setSectionResizeMode(1, QHeaderView.Interactive)  # target列
+        header.setSectionResizeMode(2, QHeaderView.Fixed)  # status列
+        header.setSectionResizeMode(3, QHeaderView.Fixed)  # start time列
+        header.setSectionResizeMode(4, QHeaderView.Fixed)  # end time列
+        header.setStretchLastSection(False)  # 最后一列不自动拉伸
         
-        tab_run_layout.addWidget(self.tree)
+        # 设置初始列宽
+        self.tree_view.setColumnWidth(0, 50)   # level列
+        self.tree_view.setColumnWidth(1, 1000)  # target列
+        self.tree_view.setColumnWidth(2, 80)  # status列
+        self.tree_view.setColumnWidth(3, 200)  # start time列
+        self.tree_view.setColumnWidth(4, 200)  # end time列
 
-        # 信号槽
+        # 添加事件过滤器
+        self.tree_view_event_filter = TreeViewEventFilter(self.tree_view, self)
+        self.tree_view.viewport().installEventFilter(self.tree_view_event_filter)
+
+        # 添加到布局
+        tab_run_layout.addWidget(self.tree_view)
+
+        # 信号槽连接
         self.gen_combo.combobox.currentIndexChanged.connect(self.click_event)
-        self.En_search.returnPressed.connect(self.get_entry)
+        self.tree_view.doubleClicked.connect(self.copy_tar_from_model)
+        
+        # 设置右键菜单
+        self.tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree_view.customContextMenuRequested.connect(self.show_context_menu_for_view)
 
         bt_invalid.clicked.connect(lambda: self.start('XMeta_invalid'))
         bt_unskip.clicked.connect(lambda: self.start('XMeta_unskip'))
@@ -360,7 +414,21 @@ class MonitorRuns(QMainWindow):
         self.resize(1200,800)
         self.center()
 
-        self.create_context_menu()
+        # 创建菜单栏和右键菜单
+        self.create_menu()
+
+        self.context_menu_active = False
+
+        # 初始化搜索对话框
+        self.search_dialog = SearchDialog(self)
+        self.search_dialog.search_box.returnPressed.connect(self.search_in_code)
+        # 移除这两行，不再使用 clicked 信号
+        # self.search_dialog.prev_button.clicked.connect(lambda: self.navigate_search_results(-1))
+        # self.search_dialog.next_button.clicked.connect(lambda: self.navigate_search_results(1))
+        
+        # 添加快捷键
+        self.shortcut_search = QShortcut(QKeySequence("Ctrl+F"), self)
+        self.shortcut_search.activated.connect(self.toggle_search_dialog)
 
     def center(self):
         qr = self.frameGeometry()
@@ -385,7 +453,9 @@ class MonitorRuns(QMainWindow):
             self.tabwidget.setCurrentIndex(idx)
         
         # 清空并重新加载树
-        self.tree.clear()
+        if self.model:
+            self.model.removeRows(0, self.model.rowCount())  # 使用 model 的方法清除数据
+        
         self.get_tree(self.combo_sel)  # 重新加载新 run 的数据
 
     def change_run(self):
@@ -394,95 +464,111 @@ class MonitorRuns(QMainWindow):
             # 更新所有 tab 中的树控件
             for i in range(self.tabwidget.count()):
                 tab = self.tabwidget.widget(i)
-                tree_widgets = tab.findChildren(QTreeWidget)
+                tab_text = self.tabwidget.tabText(i)
                 
+                # 获取所有树控件
+                tree_widgets = []
+                tree_views = []
+                
+                # 检查是否是 retrace tab
+                if hasattr(tab, 'retrace_tree'):
+                    tree_widgets.append(tab.retrace_tree)
+                else:
+                    tree_widgets.extend(tab.findChildren(QTreeWidget))
+                    tree_views.extend(tab.findChildren(QtWidgets.QTreeView))
+                
+                # 确定正确的 run_dir
+                if tab_text == "All Runs Status":
+                    # 对于All Runs Status标签页，使用专门的更新方法
+                    if tree_widgets:
+                        self.update_all_runs_status(tree_widgets[0])
+                    continue
+                
+                run_dir = os.path.join(self.gen_combo.cur_dir, tab_text)
+                    
+                # 更新所有树控件的状态
                 for tree_widget in tree_widgets:
-                    # 获取当前 tab 对应的 run 目录
-                    tab_text = self.tabwidget.tabText(i)
-                    if tab_text == "All Runs Status":
-                        # 对于 All Runs Status tab，每个项目都有自己的 run 目录
-                        iterator = QTreeWidgetItemIterator(tree_widget)
-                        while iterator.value():
-                            item = iterator.value()
-                            if item.text(0):  # Run Directory
-                                run_dir = os.path.join(self.gen_combo.cur_dir, item.text(0))
-                                target = item.text(1)
-                                if target != "N/A":
-                                    target_file = os.path.join(run_dir, 'status', target)
-                                    new_status = self.get_target_status(target_file)
-                                    
-                                    # 如果状态发生变化，更新状态和颜色
-                                    if new_status != item.text(2):
-                                        item.setText(2, new_status)
-                                        # 清除所有列的背景色
-                                        for col in range(item.columnCount()):
-                                            item.setBackground(col, QBrush())
-                                        # 设置新的背景色
-                                        if new_status in self.colors:
-                                            color = QColor(self.colors[new_status])
-                                            for col in range(item.columnCount()):
-                                                item.setBackground(col, QBrush(color))
-                                        
-                                        # 更新时间戳
-                                        if new_status != "":
-                                            timestamp = datetime.fromtimestamp(os.path.getmtime(target_file)).strftime("%Y-%m-%d %H:%M:%S")
-                                            item.setText(3, timestamp)
-                            iterator += 1
-                    else:
-                        # 对于retrace tab和主tab，使用当前选中的run目录
-                        run_dir = self.combo_sel
-                        
-                        # 保存选中状态
-                        selected_items = tree_widget.selectedItems()
-                        selected_info = []
-                        for item in selected_items:
-                            if item.parent():
-                                selected_info.append((item.parent().text(0), item.text(1)))
-                        
-                        # 遍历所有项目并更新状态
-                        iterator = QTreeWidgetItemIterator(tree_widget)
-                        while iterator.value():
-                            item = iterator.value()
-                            if item.text(1):  # 如果有target名称
-                                target = item.text(1)
-                                target_file = os.path.join(run_dir, 'status', target)
-                                new_status = self.get_target_status(target_file)
-                                
-                                # 如果状态发生变化，更新状态和颜色
-                                if new_status != item.text(2):
-                                    item.setText(2, new_status)
-                                    # 清除所有列的背景色
-                                    for col in range(item.columnCount()):
-                                        item.setBackground(col, QBrush())
-                                    # 设置新的背景色
-                                    if new_status in self.colors:
-                                        color = QColor(self.colors[new_status])
-                                        for col in range(item.columnCount()):
-                                            item.setBackground(col, QBrush(color))
-                                
-                                # 更新时间信息，无论状态是否改变
-                                tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
-                                start_time, end_time = self.get_start_end_time(tgt_track_file)
-                                # 只有当时间确实存在时才更新
-                                if start_time or end_time:
-                                    item.setText(3, start_time)
-                                    item.setText(4, end_time)
-                            
-                            iterator += 1
-                        
-                        # 恢复选中状态
-                        for parent_text, target_text in selected_info:
-                            items = tree_widget.findItems(target_text, Qt.MatchExactly | Qt.MatchRecursive, 1)
-                            for item in items:
-                                if item.parent() and item.parent().text(0) == parent_text:
-                                    item.setSelected(True)
+                    self.update_tree_widget_status(tree_widget, run_dir)
+                
+                # 更新所有树视图的状态
+                for tree_view in tree_views:
+                    self.update_tree_view_status(tree_view, run_dir)
                 
         except Exception as e:
-            print(f"Error in change_run: {e}")  # 添加错误日志
-            pass  # 静默处理异常
+            print(f"Error in change_run: {e}")
+
+    def update_tree_widget_status(self, tree_widget, base_dir):
+        """更新QTreeWidget的状态"""
+        iterator = QtWidgets.QTreeWidgetItemIterator(tree_widget)
+        while iterator.value():
+            item = iterator.value()
+            if item.text(1):  # 确保有target
+                target = item.text(1)
+                current_status = item.text(2)  # 获取当前状态
+                
+                # 获取正确的run_dir
+                if isinstance(tree_widget.parent(), QWidget) and hasattr(tree_widget.parent(), 'retrace_tree'):
+                    # 如果是retrace tab中的tree widget
+                    run_dir = self.combo_sel
+                else:
+                    run_dir = base_dir
+                    
+                target_file = os.path.join(run_dir, 'status', target)
+                new_status = self.get_target_status(target_file)
+                
+                # 如果新状态为空且当前有状态，保持当前状态
+                if new_status == '' and current_status != '':
+                    if os.path.exists(target_file):
+                        new_status = current_status
+                
+                # 只在状态确实改变时更新
+                if new_status != current_status:
+                    item.setText(2, new_status)
+                    if new_status in self.colors:
+                        color = QColor(self.colors[new_status])
+                        for col in range(item.columnCount()):
+                            item.setBackground(col, QBrush(color))
+                    
+                    if new_status != "":
+                        tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
+                        start_time, end_time = self.get_start_end_time(tgt_track_file)
+                        item.setText(3, start_time)
+                        item.setText(4, end_time)
+            iterator.__iadd__(1)
+
+    def update_tree_view_status(self, tree_view, run_dir):
+        """更新QTreeView的状态"""
+        model = tree_view.model()
+        if not model:
+            return
+            
+        for row in range(model.rowCount()):
+            target_index = model.index(row, 1)
+            target = model.data(target_index)
+            if target:
+                target_file = os.path.join(run_dir, 'status', target)
+                new_status = self.get_target_status(target_file)
+                
+                status_index = model.index(row, 2)
+                current_status = model.data(status_index)
+                
+                if new_status != current_status:
+                    model.setData(status_index, new_status)
+                    if new_status in self.colors:
+                        color = QColor(self.colors[new_status])
+                        for col in range(model.columnCount()):
+                            model.item(row, col).setBackground(QBrush(color))
+                    
+                    if new_status != "":
+                        tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
+                        start_time, end_time = self.get_start_end_time(tgt_track_file)
+                        model.setData(model.index(row, 3), start_time)
+                        model.setData(model.index(row, 4), end_time)
 
     def get_entry(self):
-        self.filter_tab()
+        """保留方法但暂时不使用"""
+        pass
+        # self.filter_tab()  # 注释掉，保留方法
 
     def copy_tar(self):
         # 将选中target拷贝到剪贴板
@@ -496,24 +582,49 @@ class MonitorRuns(QMainWindow):
         if self.tabwidget.widget(index) != self.tab_run:  # 如果不是主tab
             self.tabwidget.removeTab(index)
 
-    def start(self, status):
-        """根据当前活动的 tab 执行命令"""
-        if status == 'XMeta_run all':
-            self.bt_notar(status)
-        else:
-            # 获取当前活动的 tab
-            current_tab = self.tabwidget.currentWidget()
-            # 根据当前 tab 获取对应的树控件
-            tree_widget = None
-            if current_tab == self.tab_run:
-                tree_widget = self.tree
-            else:
-                # 在当前 tab 中查找 QTreeWidget
-                for child in current_tab.findChildren(QTreeWidget):
-                    tree_widget = child
-                    break
+    def get_selected_targets(self):
+        """获取当前选中的targets"""
+        selected_indexes = self.tree_view.selectionModel().selectedIndexes()
+        if not selected_indexes:
+            return []
             
-            self.bt_event(status, tree_widget)
+        # 获取选中行的target列(第2列)的值
+        targets = []
+        seen_rows = set()  # 用于跟踪已处理的行
+        
+        for index in selected_indexes:
+            row = index.row()
+            if row in seen_rows:
+                continue
+                
+            # 获取target列的值
+            target_index = self.model.index(row, 1)  # 1是target列的索引
+            target = self.model.data(target_index)
+            if target:
+                targets.append(target)
+            seen_rows.add(row)
+            
+        return targets
+
+    def start(self, action):
+        """执行flow动作并刷新视图"""
+        # 获取选中的targets
+        selected_targets = self.get_selected_targets()
+        if not selected_targets:
+            return
+            
+        # 构建命令，只执行基本命令
+        cmd = f"cd {self.combo_sel} && {action} "
+        cmd += " ".join(selected_targets)
+        
+        # 执行命令
+        process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process.communicate()
+        
+        # 如果是unskip动作或skip动作,刷新TreeView
+        if action in ['XMeta_unskip', 'XMeta_skip']:
+            # 重新获取数据并刷新视图
+            self.get_tree(self.combo_sel)
 
     def Xterm(self):
         os.chdir(self.combo_sel)
@@ -522,13 +633,57 @@ class MonitorRuns(QMainWindow):
     def bt_event(self, status, tree_widget=None):
         """处理按钮事件，支持从指定的树获取选中项"""
         # 如果没有指定树，使用主树
-        selected_tree = tree_widget if tree_widget else self.tree
-        selected = selected_tree.selectedItems()
-        os.chdir(self.combo_sel)
-        select_run_targets = " ".join([itm.text(1) for itm in selected if itm.text(1) != ""])
+        selected_tree = tree_widget if tree_widget else self.tree_view
+        
+        # 获取选中的 targets
+        select_run_targets = []
+        
+        if isinstance(selected_tree, QtWidgets.QTreeView):
+            # 处理 TreeView 的选中项
+            selection_model = selected_tree.selectionModel()
+            if selection_model:
+                selected_indexes = selection_model.selectedRows(1)  # 1 是 target 列
+                select_run_targets = [selected_tree.model().data(index) for index in selected_indexes if selected_tree.model().data(index)]
+        elif isinstance(selected_tree, QTreeWidget):
+            # 处理 TreeWidget 的选中项
+            selected = selected_tree.selectedItems()
+            select_run_targets = [item.text(1) for item in selected if item.text(1) != ""]
+        
+        # 将targets列表转换为空格分隔的字符串
+        select_run_targets = " ".join(select_run_targets)
+        
         if select_run_targets.strip():
+            # 执行命令
+            os.chdir(self.combo_sel)
             os.system('%s %s' %(status, select_run_targets))
-        selected_tree.clearSelection()
+            
+            # 获取当前 tab
+            current_tab = self.tabwidget.currentWidget()
+            
+            # 查找当前 tab 中的 TreeView
+            tree_view = None
+            if current_tab == self.tab_run:
+                tree_view = self.tree_view
+            else:
+                # 在当前 tab 中查找 QTreeView
+                for child in current_tab.findChildren(QtWidgets.QTreeView):
+                    tree_view = child
+                    break
+            
+            # 立即更新状态
+            if tree_view:
+                for target in select_run_targets.split():
+                    target_file = os.path.join(self.combo_sel, 'status', target)
+                    new_status = self.get_target_status(target_file)
+                    tgt_track_file = os.path.join(self.combo_sel, 'logs/targettracker', target)
+                    start_time, end_time = self.get_start_end_time(tgt_track_file)
+                    self.sync_item_status(target, new_status, start_time, end_time, selected_tree, tree_view)
+        
+        # 清除选择
+        if isinstance(selected_tree, QtWidgets.QTreeView):
+            selected_tree.clearSelection()
+        elif isinstance(selected_tree, QTreeWidget):
+            selected_tree.clearSelection()
 
     def bt_notar(self, status):
         os.chdir(self.combo_sel)
@@ -554,12 +709,18 @@ class MonitorRuns(QMainWindow):
             except subprocess.CalledProcessError:
                 pass
 
-    def bt_log(self, item):
+    def bt_log(self, item=None):
         """Log - 打开 logs 目录下的 .log 文件"""
-        if not item or item.childCount() > 0:
-            return
+        # 获取当前选中的项
+        if isinstance(item, QtWidgets.QTreeWidgetItem):
+            target = item.text(1)
+        else:
+            indexes = self.tree_view.selectedIndexes()
+            if not indexes:
+                return
+            target_index = self.model.index(indexes[0].row(), 1)  # 1是target列
+            target = self.model.data(target_index)
         
-        target = item.text(1)
         if not target:
             return
         
@@ -569,16 +730,15 @@ class MonitorRuns(QMainWindow):
         log_file = os.path.join(current_run, 'logs', f"{current_target}.log")
         log_file_gz = f"{log_file}.gz"
         
-        if os.path.exists(log_file):
-            try:
-                subprocess.run(['gvim', log_file], check=True)
-            except subprocess.CalledProcessError:
-                pass
-        elif os.path.exists(log_file_gz):
-            try:
-                subprocess.run(['gvim', log_file_gz], check=True)
-            except subprocess.CalledProcessError:
-                pass
+        try:
+            if os.path.exists(log_file):
+                process = subprocess.Popen(['gvim', log_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                process.communicate()  # 等待进程完成
+            elif os.path.exists(log_file_gz):
+                process = subprocess.Popen(['gvim', log_file_gz], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                process.communicate()  # 等待进程完成
+        except Exception as e:
+            print(f"Error opening log file: {e}")
 
     def bt_cmd(self, item):
         """Command - 打开 cmds 目录下的 .cmd 文件"""
@@ -601,92 +761,78 @@ class MonitorRuns(QMainWindow):
                 pass
 
     def get_filter_target(self):
-        pattern = self.En_search.text()
-        # 原逻辑中使用正则从tar_name中筛选
-        add_wildcard = '*' + pattern + '*'
-        wildcard_replace = add_wildcard.replace('*', '.*')
-        input_pattern = re.compile(wildcard_replace + '$')
-        self.matched_list = [e for e in self.tar_name if input_pattern.match(e)]
+        """保留方法但暂时不使用"""
+        pass
+        # pattern = self.En_search.text()
+        # ... 保留其余代码但暂时注释掉
 
     def filter_tab(self):
-        if not self.En_search.text().strip():
+        """保留方法但暂时不使用"""
+        pass
+        # if not self.En_search.text().strip():
+        #     return
+        # ... 保留其余代码但暂时注释掉
+
+    def sync_filter_selection_from_tree(self, tree, tree_view, model):
+        """从过滤 TreeWidget 同步选择到过滤 TreeView"""
+        if hasattr(self, '_syncing_filter_selection'):
             return
-        tab_filter = QWidget()
-        tab_filter_layout = QVBoxLayout(tab_filter)
-        filter_tree = QTreeWidget()
-        filter_tree.setColumnCount(3)
-        filter_tree.setHeaderLabels(["level", "target", "status"])
-        filter_tree.setRootIsDecorated(True)
-        filter_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
-        tab_filter_layout.addWidget(filter_tree)
-
-        self.get_filter_target()
-        # 生成filter_tree数据
-        l = []
-        o = []
-        with open(os.path.join(self.combo_sel, '.target_dependency.csh'), 'r') as f:
-            a_file = f.read()
-            for target in self.matched_list:
-                level_name = 'TARGET_LEVEL_%s' %target
-                match_lv = re.search(r'set\s*(%s)\s*\=(\s.*)' %level_name, a_file)
-                if not match_lv:
-                    continue
-                target_name = match_lv.group(2).strip()
-                if re.match(r"^(['\"]).*\"$", target_name):
-                    target_level = re.sub(r"^['\"]|['\"]$", '', target_name).split()
-
-                target_file = os.path.join(self.combo_sel, 'status', target)
-                target_status = self.get_target_status(target_file)
-                
-                str_lv = ''.join(target_level)
-                o.append(str_lv)
-                d = [target_level, target, target_status]
-                l.append(d)
-
-        all_lv = list(set(o))
-        all_lv.sort(key=o.index)
-
-        # 创建一个字典来存储每个level的items
-        level_items = {level: [] for level in all_lv}
-
-        # 为每个数据创建item
-        for data in l:
-            str_data = ''.join(data[0])
-            item = QTreeWidgetItem(filter_tree)
-            item.setText(0, str_data)  # level
-            item.setText(1, data[1])   # target
-            item.setText(2, data[2])   # status
-            self.set_item_color(item, data[2])
-            level_items[str_data].append(item)
-
-        # 为每个level的第一个item设置展开/折叠指示器
-        for level, items in level_items.items():
-            if items:
-                first_item = items[0]
-                first_item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
-                first_item.setExpanded(True)
-                # 设置为有子节点，这样就会一直显示三角标
-                first_item.setFlags(first_item.flags() | Qt.ItemIsTristate)
-
-        # 创建事件过滤器并保存状态
-        event_filter = FilterTreeEventFilter(filter_tree)
-        event_filter.level_items = level_items
-        event_filter.level_expanded = {level: True for level in all_lv}
+        self._syncing_filter_selection = True
         
-        # 添加事件过滤器
-        filter_tree.viewport().installEventFilter(event_filter)
-        
-        # 保存事件过滤器的引用，防止被垃圾回收
-        filter_tree.event_filter = event_filter
+        try:
+            tree_view.selectionModel().clearSelection()
+            selected_items = tree.selectedItems()
+            selection = QtCore.QItemSelection()
+            
+            for tree_item in selected_items:
+                target = tree_item.text(1)
+                for row in range(model.rowCount()):
+                    model_index = model.index(row, 1)
+                    if model.data(model_index) == target:
+                        left_index = model.index(row, 0)
+                        right_index = model.index(row, model.columnCount() - 1)
+                        selection.select(left_index, right_index)
+            
+            tree_view.selectionModel().select(selection, QtCore.QItemSelectionModel.Select)
+        finally:
+            delattr(self, '_syncing_filter_selection')
 
-        idx = self.tabwidget.addTab(tab_filter, self.En_search.text())
-        self.tabwidget.setCurrentIndex(idx)
+    def sync_filter_selection_from_view(self, selected, deselected, tree, model):
+        """从过滤 TreeView 同步选择到过滤 TreeWidget"""
+        if hasattr(self, '_syncing_filter_selection'):
+            return
+        self._syncing_filter_selection = True
+        
+        try:
+            tree.clearSelection()
+            selection = tree.selectionModel().selectedRows(1)
+            
+            for index in selection:
+                target = model.data(index)
+                # 修改这里的迭代器使用方式
+                iterator = QtWidgets.QTreeWidgetItemIterator(tree)
+                while iterator.value():
+                    item = iterator.value()
+                    if item.text(1) == target:
+                        item.setSelected(True)
+                        break
+                    iterator.__iadd__(1)  # 使用 __iadd__ 方法替代 += 操作符
+        finally:
+            delattr(self, '_syncing_filter_selection')
 
     def retrace_tab(self, inout):
-        selected = self.tree.selectedItems()
-        if not selected:
+        # 获取当前选中的项
+        indexes = self.tree_view.selectedIndexes()
+        if not indexes:
             return
-        self.tar_sel = selected[0].text(1)
+            
+        # 获取target列的数据
+        target_index = self.model.index(indexes[0].row(), 1)  # 1是target列
+        self.tar_sel = self.model.data(target_index)
+        
+        if not self.tar_sel:
+            return
+            
         self.get_retrace_target(inout)
         if self.retrace_tar_name:
             tab_trace = QWidget()
@@ -697,7 +843,7 @@ class MonitorRuns(QMainWindow):
             retrace_tree.setHeaderLabels(["level", "target", "status", "start time", "end time"])  # 添加所有列标签
             retrace_tree.setRootIsDecorated(True)
             retrace_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
-            retrace_tree.itemDoubleClicked.connect(lambda: self.copy_tar_from_tree(retrace_tree))
+            retrace_tree.itemDoubleClicked.connect(lambda item: self.copy_tar(item))
 
             # 设置列宽和调整模式
             header = retrace_tree.header()
@@ -710,6 +856,57 @@ class MonitorRuns(QMainWindow):
             retrace_tree.setColumnWidth(2, 100)  # status列
             retrace_tree.setColumnWidth(3, 150)  # start time列
             retrace_tree.setColumnWidth(4, 150)  # end time列
+
+            # 生成retrace_tree数据
+            l = []
+            o = []
+            run_dir = self.combo_sel
+            if inout == 'in':
+                self.retrace_tar_name.append(self.tar_sel)
+            elif inout == 'out':
+                self.retrace_tar_name.insert(0, self.tar_sel)
+
+            with open(os.path.join(run_dir, '.target_dependency.csh'), 'r') as f:
+                a_file = f.read()
+                for target in self.retrace_tar_name:
+                    level_name = 'TARGET_LEVEL_%s' %target
+                    match_lv = re.search(r'set\s*(%s)\s*\=(\s.*)' %level_name, a_file)
+                    if not match_lv:
+                        continue
+                    target_name = match_lv.group(2).strip()
+                    if re.match(r"^(['\"]).*\"$", target_name):
+                        target_level = re.sub(r"^['\"]|['\"]$", '', target_name).split()
+
+                    # 获取状态和时间信息
+                    target_file = os.path.join(run_dir, 'status', target)
+                    target_status = self.get_target_status(target_file)
+                    tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
+                    start_time, end_time = self.get_start_end_time(tgt_track_file)
+
+                    str_lv = ''.join(target_level)
+                    o.append(str_lv)
+                    d = [target_level, target, target_status, start_time, end_time]
+                    l.append(d)
+
+            all_lv = list(set(o))
+            all_lv.sort(key=o.index)
+
+            level_items = {}
+            for data in l:
+                lvl, tgt, st, ct, et = data
+                str_data = ''.join(lvl)
+                item = QTreeWidgetItem([str_data, tgt, st, ct, et])
+                retrace_tree.addTopLevelItem(item)
+                
+                # 设置状态颜色
+                if st in self.colors:
+                    color = QColor(self.colors[st])
+                    for col in range(item.columnCount()):
+                        item.setBackground(col, QBrush(color))
+
+                if str_data not in level_items:
+                    level_items[str_data] = []
+                level_items[str_data].append(item)
 
             # 创建右键菜单
             context_menu = QMenu()
@@ -737,76 +934,24 @@ class MonitorRuns(QMainWindow):
 
             trace_layout.addWidget(retrace_tree)
 
-            # 生成retrace_tree数据
-            l = []
-            o = []
-            run_dir = self.combo_sel
-            if inout == 'in':
-                self.retrace_tar_name.append(self.tar_sel)
-            elif inout == 'out':
-                self.retrace_tar_name.insert(0, self.tar_sel)
-
-            with open(os.path.join(run_dir, '.target_dependency.csh'), 'r') as f:
-                a_file = f.read()
-                for target in self.retrace_tar_name:
-                    level_name = 'TARGET_LEVEL_%s' %target
-                    match_lv = re.search(r'set\s*(%s)\s*\=(\s.*)' %level_name, a_file)
-                    if not match_lv:
-                        continue
-                    target_name = match_lv.group(2).strip()
-                    if re.match(r"^(['\"]).*\"$", target_name):
-                        target_level = re.sub(r"^['\"]|['\"]$", '', target_name).split()
-                    target_file = os.path.join(run_dir, 'status', target)
-                    target_status = self.get_target_status(target_file)
-                    
-                    # 获取开始和结束时间
-                    tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
-                    start_time, end_time = self.get_start_end_time(tgt_track_file)
-                    
-                    str_lv = ''.join(target_level)
-                    o.append(str_lv)
-                    d = [target_level, target, target_status, start_time, end_time]  # 添加时间信息
-                    l.append(d)
-
-            all_lv = list(set(o))
-            all_lv.sort(key=o.index)
-
-            # 创建一个字典来存储每个level的items
-            level_items = {level: [] for level in all_lv}
-
-            # 为每个数据创建item
-            for data in l:
-                str_data = ''.join(data[0])
-                item = QTreeWidgetItem(retrace_tree)
-                item.setText(0, str_data)  # level
-                item.setText(1, data[1])   # target
-                item.setText(2, data[2])   # status
-                item.setText(3, data[3])   # start time
-                item.setText(4, data[4])   # end time
-                self.set_item_color(item, data[2])
-                
-                # 将item添加到对应level的列表中
-                if str_data not in level_items:
-                    level_items[str_data] = []
-                    # 第一个item设置为可展开
-                    item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
-                    item.setExpanded(True)
-                level_items[str_data].append(item)
-
-            # 创建事件过滤器并保存状态
-            event_filter = FilterTreeEventFilter(retrace_tree)
+            # 创建事件过滤器
+            event_filter = TreeViewEventFilter(retrace_tree, self)
             event_filter.level_items = level_items
-            event_filter.level_expanded = {level: True for level in all_lv}
-            
-            # 添加事件过滤器
             retrace_tree.viewport().installEventFilter(event_filter)
-            
+
             # 保存事件过滤器的引用，防止被垃圾回收
             retrace_tree.event_filter = event_filter
 
+            # 添加到标签页
             idx = self.tabwidget.addTab(tab_trace, self.tar_sel)
             self.tabwidget.setCurrentIndex(idx)
-            self.tree.clearSelection()
+            self.tree_view.clearSelection()
+
+            # 将retrace_tree添加到tab_trace的属性中，以便在change_run中能够找到它
+            tab_trace.retrace_tree = retrace_tree
+
+            # 立即更新状态
+            self.update_tree_widget_status(retrace_tree, run_dir)
 
     def get_retrace_target(self, inout):
         self.retrace_tar_name = []
@@ -841,27 +986,28 @@ class MonitorRuns(QMainWindow):
         return self.tar_name
 
     def copy_item(self):
-        selected = self.tree.selectedItems()
+        selected = self.tree_view.selectedItems()
         n = [itm.text(1) for itm in selected if itm.text(1) != ""]
         return n
 
     def get_tree(self, run_dir):
-        # 保存当前状态
-        tree_state = self.save_tree_state()
-        
         self.combo_sel = run_dir
-        self.tree.clear()
+        
+        # 清空模型
+        self.model.clear()
+        self.model.setHorizontalHeaderLabels(["level", "target", "status", "start time", "end time"])
+        
+        # 设置自定义代理来处理缩进
+        delegate = IndentDelegate(self.tree_view)
+        self.tree_view.setItemDelegate(delegate)
+        
+        # 获取数据
         self.get_target()
-
-        # 清理
-        self.countX = 0
+        
         l = []
         o = []
         
-        # 用于计算最大target名称宽度
-        fm = QFontMetrics(self.tree.font())
-        max_target_width = 0
-        
+        # 读取数据
         with open(os.path.join(run_dir, '.target_dependency.csh'), 'r') as f:
             a_file = f.read()
             for target in self.tar_name:
@@ -873,11 +1019,6 @@ class MonitorRuns(QMainWindow):
                 if re.match(r"^(['\"]).*\"$", target_name):
                     target_level = re.sub(r"^['\"]|['\"]$", '', target_name).split()
 
-                # 计算target名称宽度
-                target_width = fm.width(target)
-                max_target_width = max(max_target_width, target_width)
-
-                # 获取status等信息
                 target_file = os.path.join(run_dir, 'status', target)
                 tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
 
@@ -888,62 +1029,103 @@ class MonitorRuns(QMainWindow):
                 o.append(str_lv)
                 d = [target_level, target, target_status, start_time, end_time]
                 l.append(d)
-
-        # 设置列宽
-        self.tree.setColumnWidth(0, 80)  # level列
         
-        # target列动态宽度但有最大限制
-        max_allowed_width = 600
-        target_column_width = min(max_target_width + 20, max_allowed_width)
-        self.tree.setColumnWidth(1, target_column_width)
-        
-        # 其他列固定宽度
-        self.tree.setColumnWidth(2, 100)  # status列
-        self.tree.setColumnWidth(3, 150)  # start time列
-
-        # 构建扁平化的树结构
+        # 获取所有唯一的level并排序
         all_lv = list(set(o))
         all_lv.sort(key=o.index)
-
-        # 为每个level创建一个字典来存储其items
-        self.level_items = {level: [] for level in all_lv}
         
-        # 初始化level展开状态
-        self.level_expanded = {level: True for level in all_lv}
-
-        # 创建所有项目
+        # 按level分组数据
+        level_data = {}
         for data in l:
             lvl, tgt, st, ct, et = data
             str_data = ''.join(lvl)
-            
-            # 创建item
-            item = QTreeWidgetItem(self.tree)
-            item.setText(0, str_data)  # level
-            item.setText(1, tgt)       # target
-            item.setText(2, st)        # status
-            item.setText(3, ct)        # start time
-            item.setText(4, et)        # end time
-            
-            # 设置颜色
-            self.set_item_color(item, st)
-            
-            # 将item添加到对应level的列表中
-            self.level_items[str_data].append(item)
-
-        # 为每个level的第一个item设置展开/折叠指示器
-        for level, items in self.level_items.items():
-            if items:
-                first_item = items[0]
-                first_item.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
-                first_item.setExpanded(self.level_expanded[level])
-                # 设置为有子节点，这样就会一直显示三角标
-                first_item.setFlags(first_item.flags() | Qt.ItemIsTristate)
-
-        # 使用事件过滤器处理点击事件
-        self.tree.viewport().installEventFilter(self)
+            if str_data not in level_data:
+                level_data[str_data] = []
+            level_data[str_data].append((tgt, st, ct, et))
         
-        # 恢复状态
-        self.restore_tree_state(tree_state)
+        # 创建父子节点结构
+        level_items_model = {}
+        
+        # 遍历每个level
+        for level in all_lv:
+            if level not in level_data:
+                continue
+            
+            items = level_data[level]
+            if not items:
+                continue
+            
+            # 创建父节点（第一个item）
+            root_item = QtGui.QStandardItem()
+            root_item.setText(level)
+            root_item.setEditable(False)
+            
+            # 创建其他列的项目
+            root_items = [root_item]
+            first_item = items[0]
+            for value in [first_item[0], first_item[1], first_item[2], first_item[3]]:
+                item = QtGui.QStandardItem()
+                item.setText(value)
+                item.setEditable(False)
+                root_items.append(item)
+            
+            # 设置父节点颜色
+            if first_item[1] in self.colors:  # first_item[1] 是 status
+                color = QColor(self.colors[first_item[1]])
+                for item in root_items:
+                    item.setBackground(QBrush(color))
+            
+            # 添加父节点到模型
+            self.model.appendRow(root_items)
+            parent_row = self.model.rowCount() - 1
+            level_items_model[level] = [parent_row]
+            
+            # 如果有多个item，添加为子节点
+            if len(items) > 1:
+                for tgt, st, ct, et in items[1:]:
+                    # 创建子节点的所有列
+                    child_items = []
+                    # level列
+                    level_item = QtGui.QStandardItem()
+                    level_item.setText(level)
+                    level_item.setEditable(False)
+                    child_items.append(level_item)
+                    
+                    # 其他列
+                    for value in [tgt, st, ct, et]:
+                        item = QtGui.QStandardItem()
+                        item.setText(value)
+                        item.setEditable(False)
+                        child_items.append(item)
+                    
+                    # 设置子节点颜色
+                    if st in self.colors:
+                        color = QColor(self.colors[st])
+                        for item in child_items:
+                            item.setBackground(QBrush(color))
+                    
+                    # 添加子节点到父节点
+                    root_item.appendRow(child_items)
+                    level_items_model[level].append(self.model.rowCount())
+        
+        # 保存level项目映射到事件过滤器
+        self.tree_view_event_filter.level_items = level_items_model
+        
+        # 设置列宽和调整模式
+        header = self.tree_view.header()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)  # level列
+        header.setSectionResizeMode(1, QHeaderView.Interactive)  # target列
+        header.setSectionResizeMode(2, QHeaderView.Fixed)  # status列
+        header.setSectionResizeMode(3, QHeaderView.Fixed)  # start time列
+        header.setSectionResizeMode(4, QHeaderView.Fixed)  # end time列
+        header.setStretchLastSection(False)  # 最后一列不自动拉伸
+        
+        # 设置列宽
+        self.tree_view.setColumnWidth(0, 50)   # level列
+        self.tree_view.setColumnWidth(1, 1000)  # target列
+        self.tree_view.setColumnWidth(2, 80)  # status列
+        self.tree_view.setColumnWidth(3, 200)  # start time列
+        self.tree_view.setColumnWidth(4, 200)  # end time列
 
     def set_item_color(self, item, status):
         if status in self.colors:
@@ -983,167 +1165,65 @@ class MonitorRuns(QMainWindow):
             'expanded': {},
             'selected': [],
             'selected_parents': [],
-            'scroll': self.tree.verticalScrollBar().value()
+            'scroll': self.tree_view.verticalScrollBar().value()
         }
-        iterator = QTreeWidgetItemIterator(self.tree)
-        while iterator.value():
-            item = iterator.value()
-            if item.parent():
-                parent_text = item.parent().text(0)
-                state['expanded'][parent_text] = item.parent().isExpanded()
-                if item.isSelected():
-                    state['selected'].append((parent_text, item.text(1)))
-            else:
-                if item.isSelected():
-                    state['selected_parents'].append(item.text(0))
-            iterator += 1
+        
+        # 使用 model 来遍历 TreeView 的项目
+        model = self.tree_view.model()
+        if model:
+            for row in range(model.rowCount()):
+                level_index = model.index(row, 0)  # 第一列是 level
+                target_index = model.index(row, 1)  # 第二列是 target
+                
+                level = model.data(level_index)
+                target = model.data(target_index)
+                
+                # 保存展开状态
+                if level:
+                    state['expanded'][level] = self.tree_view.isExpanded(level_index)
+                
+                # 保存选中状态
+                if self.tree_view.selectionModel().isSelected(level_index):
+                    state['selected_parents'].append(level)
+                if self.tree_view.selectionModel().isSelected(target_index):
+                    state['selected'].append((level, target))
+        
         return state
 
     def restore_tree_state(self, state):
-        # 恢复展开状态
-        iterator = QTreeWidgetItemIterator(self.tree)
-        while iterator.value():
-            item = iterator.value()
-            if not item.parent():
-                level_text = item.text(0)
-                if level_text in state['expanded']:
-                    item.setExpanded(state['expanded'][level_text])
-                # 恢复父节点的选中状态
-                if level_text in state.get('selected_parents', []):
-                    item.setSelected(True)
-            iterator += 1
-        
-        # 恢复子节点选中状态
-        if state.get('selected'):
-            for parent_text, child_text in state['selected']:
-                items = self.tree.findItems(child_text, Qt.MatchExactly | Qt.MatchRecursive, 1)
-                for item in items:
-                    if item.parent() and item.parent().text(0) == parent_text:
-                        item.setSelected(True)
+        # 恢复展开状态和选中状态
+        model = self.tree_view.model()
+        if model:
+            for row in range(model.rowCount()):
+                level_index = model.index(row, 0)  # level 列
+                target_index = model.index(row, 1)  # target 列
+                
+                level = model.data(level_index)
+                target = model.data(target_index)
+                
+                # 恢复展开状态
+                if level in state.get('expanded', {}):
+                    self.tree_view.setExpanded(level_index, state['expanded'][level])
+                
+                # 恢复选中状态
+                if level in state.get('selected_parents', []):
+                    self.tree_view.selectionModel().select(level_index, 
+                        QtCore.QItemSelectionModel.Select)
+                
+                # 恢复子项选中状态
+                if state.get('selected'):
+                    for parent_text, child_text in state['selected']:
+                        if level == parent_text and target == child_text:
+                            self.tree_view.selectionModel().select(target_index,
+                                QtCore.QItemSelectionModel.Select)
         
         # 恢复滚动条位置
         if 'scroll' in state:
-            self.tree.verticalScrollBar().setValue(state['scroll'])
-
-    def create_context_menu(self):
-        """创建右键菜单"""
-        self.context_menu = QMenu(self)
-        
-        # 添加菜单项
-        terminal_action = self.context_menu.addAction("Terminal")
-        csh_action = self.context_menu.addAction("csh")
-        log_action = self.context_menu.addAction("Log")
-        cmd_action = self.context_menu.addAction("cmd")
-        self.context_menu.addSeparator()
-        trace_up_action = self.context_menu.addAction("Trace Up")
-        trace_down_action = self.context_menu.addAction("Trace Down")
-        
-        # 连接信号到对应的槽函数
-        terminal_action.triggered.connect(lambda: self.bt_terminal(self.tree.currentItem()))
-        csh_action.triggered.connect(lambda: self.bt_csh(self.tree.currentItem()))
-        log_action.triggered.connect(lambda: self.bt_log(self.tree.currentItem()))
-        cmd_action.triggered.connect(lambda: self.bt_cmd(self.tree.currentItem()))
-        trace_up_action.triggered.connect(lambda: self.bt_trace_up(self.tree.currentItem()))
-        trace_down_action.triggered.connect(lambda: self.bt_trace_down(self.tree.currentItem()))
-        
-        # 设置树形视图上下文菜单策略
-        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tree.customContextMenuRequested.connect(self.show_context_menu)
-
-    def show_context_menu(self, position):
-        """显示右键菜单"""
-        item = self.tree.itemAt(position)
-        if item:
-            # 确保只在叶子节点上显示完整菜单
-            if item.childCount() == 0:  # 叶子节点
-                self.context_menu.exec_(self.tree.viewport().mapToGlobal(position))
-
-    def bt_trace_up(self, item):
-        """Trace Up - 显示当前target的上游依赖"""
-        if item and item.childCount() == 0:  # 确保是叶子节点
-            self.retrace_tab('in')
-
-    def bt_trace_down(self, item):
-        """Trace Down - 显示依赖于当前target的下游项目"""
-        if item and item.childCount() == 0:  # 确保是叶子节点
-            self.retrace_tab('out')
-
-    def bt_terminal(self, item):
-        """Terminal - 执行 XMeta_term 命令"""
-        try:
-            os.chdir(self.combo_sel)
-            os.system('XMeta_term')
-        except Exception as e:
-            pass
-
-    def bt_csh(self, item):
-        """Shell - 打开 make_targets 目录下的 .csh 文件"""
-        if not item or item.childCount() > 0:
-            return
-        
-        target = item.text(1)
-        if not target:
-            return
-        
-        current_target = target
-        current_run = self.combo_sel
-        
-        shell_file = os.path.join(current_run, 'make_targets', f"{current_target}.csh")
-        
-        if os.path.exists(shell_file):
-            try:
-                subprocess.run(['gvim', shell_file], check=True)
-            except subprocess.CalledProcessError:
-                pass
-
-    def bt_log(self, item):
-        """Log - 打开 logs 目录下的 .log 文件"""
-        if not item or item.childCount() > 0:
-            return
-        
-        target = item.text(1)
-        if not target:
-            return
-        
-        current_target = target
-        current_run = self.combo_sel
-        
-        log_file = os.path.join(current_run, 'logs', f"{current_target}.log")
-        log_file_gz = f"{log_file}.gz"
-        
-        if os.path.exists(log_file):
-            try:
-                subprocess.run(['gvim', log_file], check=True)
-            except subprocess.CalledProcessError:
-                pass
-        elif os.path.exists(log_file_gz):
-            try:
-                subprocess.run(['gvim', log_file_gz], check=True)
-            except subprocess.CalledProcessError:
-                pass
-
-    def bt_cmd(self, item):
-        """Command - 打开 cmds 目录下的 .cmd 文件"""
-        if not item or item.childCount() > 0:
-            return
-        
-        target = item.text(1)
-        if not target:
-            return
-        
-        current_target = target
-        current_run = self.combo_sel
-        
-        cmd_file = os.path.join(current_run, 'cmds', f"{current_target}.cmd")
-        
-        if os.path.exists(cmd_file):
-            try:
-                subprocess.run(['gvim', cmd_file], check=True)
-            except subprocess.CalledProcessError:
-                pass
+            self.tree_view.verticalScrollBar().setValue(state['scroll'])
 
     def create_menu(self):
-        """Create menu bar"""
+        """Create menu bar and context menu"""
+        # 创建菜单栏
         menubar = self.menuBar()
         
         # Add View menu
@@ -1153,29 +1233,52 @@ class MonitorRuns(QMainWindow):
         show_all_runs_action = QAction('Show All Runs Status', self)
         show_all_runs_action.triggered.connect(self.show_all_runs_status)
         view_menu.addAction(show_all_runs_action)
+        
+        # 创建右键菜单
+        self.context_menu = QMenu()
+        # 设置菜单样式
+        self.context_menu.setStyleSheet("""
+            QMenu {
+                background-color: #FFFFFF;
+                border: 1px solid #C0C0C0;
+                padding: 2px;
+            }
+            QMenu::item {
+                padding: 3px 20px 3px 20px;
+                border-radius: 2px;
+                margin: 1px;
+            }
+            QMenu::item:selected {
+                background-color: #E1BEE7;
+                color: black;
+            }
+            QMenu::item:hover {
+                background-color: #F5F5F5;
+                color: black;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #C0C0C0;
+                margin: 2px 0px 2px 0px;
+            }
+        """)
+        
+        # 添加右键菜单项
+        self.context_menu.addAction("Terminal")
+        self.context_menu.addAction("csh")
+        self.context_menu.addAction("Log")
+        self.context_menu.addAction("cmd")
+        self.context_menu.addSeparator()
+        self.context_menu.addAction("Trace Up")
+        self.context_menu.addAction("Trace Down")
 
-    def show_all_runs_status(self):
-        """Show status of all runs in a new tab"""
-        # Create new tab
-        tab_status = QWidget()
-        tab_status_layout = QVBoxLayout(tab_status)
+    def update_all_runs_status(self, status_tree):
+        """更新All Runs Status标签页的状态"""
+        # 保存当前选中的项
+        selected_items = []
+        for item in status_tree.selectedItems():
+            selected_items.append(item.text(0))  # 保存run directory名称
         
-        # Create tree widget for status display
-        status_tree = QTreeWidget()
-        status_tree.setColumnCount(4)
-        status_tree.setHeaderLabels(["Run Directory", "Latest Target", "Status", "Timestamp"])
-        status_tree.setRootIsDecorated(False)  # 不显示展开箭头
-        
-        # Set column widths
-        header = status_tree.header()
-        header.setSectionResizeMode(0, QHeaderView.Interactive)  # Run Directory 可调整
-        header.setSectionResizeMode(1, QHeaderView.Interactive)  # Latest Target 可调整
-        header.setSectionResizeMode(2, QHeaderView.Fixed)       # Status 固定宽度
-        header.setSectionResizeMode(3, QHeaderView.Stretch)     # Timestamp 自动填充
-        
-        tab_status_layout.addWidget(status_tree)
-        
-        # Get data
         base_path = self.gen_combo.cur_dir
         
         try:
@@ -1190,7 +1293,10 @@ class MonitorRuns(QMainWindow):
         if not run_dirs:
             return
 
-        # Add data to tree
+        # 清空现有项目
+        status_tree.clear()
+
+        # 重新添加数据
         for run_dir in sorted(run_dirs):
             run_path = os.path.join(base_path, run_dir)
             status_dir = os.path.join(run_path, 'status')
@@ -1201,6 +1307,9 @@ class MonitorRuns(QMainWindow):
                 item.setText(1, 'N/A')
                 item.setText(2, 'No status dir')
                 item.setText(3, 'N/A')
+                # 恢复选中状态
+                if run_dir in selected_items:
+                    item.setSelected(True)
                 continue
 
             latest_target, latest_status, latest_mtime = self.get_latest_target_status(status_dir)
@@ -1210,6 +1319,9 @@ class MonitorRuns(QMainWindow):
                 item.setText(1, 'N/A')
                 item.setText(2, 'No valid mark files')
                 item.setText(3, 'N/A')
+                # 恢复选中状态
+                if run_dir in selected_items:
+                    item.setSelected(True)
                 continue
 
             timestamp = datetime.fromtimestamp(latest_mtime).strftime("%Y-%m-%d %H:%M:%S")
@@ -1224,15 +1336,122 @@ class MonitorRuns(QMainWindow):
                 color = QColor(self.colors[latest_status])
                 for col in range(item.columnCount()):
                     item.setBackground(col, QBrush(color))
+                
+            # 恢复选中状态
+            if run_dir in selected_items:
+                item.setSelected(True)
 
-        # Resize columns to content
-        status_tree.resizeColumnToContents(0)  # Run Directory
-        status_tree.resizeColumnToContents(1)  # Latest Target
-        status_tree.resizeColumnToContents(2)  # Status
+    def show_all_runs_status(self):
+        """Show status of all runs in a new tab"""
+        # Create new tab
+        tab_status = QWidget()
+        tab_status_layout = QVBoxLayout(tab_status)
         
-        # Add new tab
+        # Create tree widget for status display
+        status_tree = QTreeWidget()
+        status_tree.setColumnCount(4)
+        status_tree.setHeaderLabels(["Run Directory", "Latest Target", "Status", "Timestamp"])
+        status_tree.setRootIsDecorated(False)  # 不显示展开箭头
+        status_tree.setSelectionMode(QTreeWidget.ExtendedSelection)  # 允许多选
+        
+        # Set column widths
+        header = status_tree.header()
+        header.setSectionResizeMode(0, QHeaderView.Interactive)  # Run Directory 可调整
+        header.setSectionResizeMode(1, QHeaderView.Interactive)  # Latest Target 可调整
+        header.setSectionResizeMode(2, QHeaderView.Fixed)       # Status 固定宽度
+        header.setSectionResizeMode(3, QHeaderView.Stretch)     # Timestamp 自动填充
+        
+        # 设置右键菜单
+        status_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        status_tree.customContextMenuRequested.connect(
+            lambda pos: self.show_context_menu_for_status(pos, status_tree)
+        )
+        
+        tab_status_layout.addWidget(status_tree)
+        
+        # 添加数据并创建标签页
+        self.update_all_runs_status(status_tree)
+        
         idx = self.tabwidget.addTab(tab_status, "All Runs Status")
         self.tabwidget.setCurrentIndex(idx)
+
+    def show_context_menu_for_status(self, position, tree_widget):
+        """为 All Runs Status 显示右键菜单"""
+        if self.context_menu_active:
+            return
+        self.context_menu_active = True
+        
+        selected_items = tree_widget.selectedItems()
+        if not selected_items:
+            return
+        
+        # 获取选中项的 run directory 和 target
+        run_dir = selected_items[0].text(0)  # 第一列是 run directory
+        target = selected_items[0].text(1)   # 第二列是 target
+        
+        # 如果没有有效的 target，不显示菜单
+        if target == 'N/A':
+            self.context_menu_active = False
+            return
+        
+        # 设置当前工作目录为选中的 run directory
+        self.combo_sel = os.path.join(self.gen_combo.cur_dir, run_dir)
+        
+        # 创建右键菜单
+        context_menu = QMenu()
+        context_menu.setStyleSheet("""
+            QMenu {
+                background-color: #FFFFFF;
+                border: 1px solid #C0C0C0;
+                padding: 2px;
+            }
+            QMenu::item {
+                padding: 3px 20px 3px 20px;
+                border-radius: 2px;
+                margin: 1px;
+            }
+            QMenu::item:selected {
+                background-color: #E1BEE7;
+                color: black;
+            }
+            QMenu::item:hover {
+                background-color: #F5F5F5;
+                color: black;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #C0C0C0;
+                margin: 2px 0px 2px 0px;
+            }
+        """)
+        
+        # 只添加基本操作菜单项，移除 Trace Up 和 Trace Down
+        terminal_action = context_menu.addAction("Terminal")
+        csh_action = context_menu.addAction("csh")
+        log_action = context_menu.addAction("Log")
+        cmd_action = context_menu.addAction("cmd")
+        
+        def cleanup_menu():
+            self.context_menu_active = False
+        
+        context_menu.aboutToHide.connect(cleanup_menu)
+        
+        # 显示菜单
+        action = context_menu.exec_(tree_widget.viewport().mapToGlobal(position))
+        
+        # 创建一个模拟的 TreeWidgetItem 来传递给现有的处理函数
+        mock_item = QTreeWidgetItem()
+        mock_item.setText(1, target)  # 设置 target 到第二列
+        
+        # 处理菜单动作
+        if action == terminal_action:
+            self.Xterm()
+        elif action == csh_action:
+            self.bt_csh(mock_item)
+        elif action == log_action:
+            self.bt_log(mock_item)
+        elif action == cmd_action:
+            self.bt_cmd(mock_item)
 
     def is_run_directory(self, dir_path):
         """检查是否为有效的 run 目录"""
@@ -1278,121 +1497,558 @@ class MonitorRuns(QMainWindow):
 
         return latest_target, latest_status, latest_mtime
 
-    def get_status_color(self, status):
-        """获取状态对应的颜色"""
-        if status == 'failed':
-            return QColor('#f56c6c')  # 红色
-        elif status == 'running':
-            return QColor('#ffd700')  # 黄色
-        elif status == 'pending':
-            return QColor('#ff9900')  # 橙色
-        elif status == 'finish':
-            return QColor('#67c23a')  # 绿色
-        else:
-            return QColor('#333333')  # 默认颜色
+    def create_context_menu(self):
+        """Create context menu"""
+        self.context_menu = QMenu()
+        # 设置菜单样式
+        self.context_menu.setStyleSheet("""
+            QMenu {
+                background-color: #FFFFFF;
+                border: 1px solid #C0C0C0;
+                padding: 2px;
+            }
+            QMenu::item {
+                padding: 3px 20px 3px 20px;
+                border-radius: 2px;
+                margin: 1px;
+            }
+            QMenu::item:selected {
+                background-color: #E1BEE7;
+                color: black;
+            }
+            QMenu::item:hover {
+                background-color: #F5F5F5;
+                color: black;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #C0C0C0;
+                margin: 2px 0px 2px 0px;
+            }
+        """)
+        
+        # 添加菜单项
+        self.context_menu.addAction("Terminal")
+        self.context_menu.addAction("csh")
+        self.context_menu.addAction("Log")
+        self.context_menu.addAction("cmd")
+        self.context_menu.addSeparator()
+        self.context_menu.addAction("Trace Up")
+        self.context_menu.addAction("Trace Down")
 
-    def colorize_status(self, status, fixed_width):
-        """为状态添加颜色"""
-        padded_status = status.ljust(fixed_width)
-        if status == 'failed':
-            return f"{self.ANSI_BOLD}{self.ANSI_RED}{padded_status}{self.ANSI_RESET}"
-        elif status == 'running':
-            return f"{self.ANSI_BOLD}{self.ANSI_YELLOW}{padded_status}{self.ANSI_RESET}"
-        elif status == 'pending':
-            return f"{self.ANSI_BOLD}{self.ANSI_ORANGE}{padded_status}{self.ANSI_RESET}"
-        elif status == 'finish':
-            return f"{self.ANSI_BOLD}{self.ANSI_GREEN}{padded_status}{self.ANSI_RESET}"
+    def show_context_menu_for_view(self, position, tree_view=None):
+        """为 QTreeView 显示右键菜单"""
+        if self.context_menu_active:
+            return
+        self.context_menu_active = True
+        
+        # 使用传入的 tree_view 或默认的 self.tree_view
+        view = tree_view if tree_view is not None else self.tree_view
+        index = view.indexAt(position)
+        if not index.isValid():
+            return
+        
+        # 获取选中项的 target
+        model = view.model()
+        target_index = model.index(index.row(), 1)  # 1 是 target 列
+        target = model.data(target_index)
+        
+        if not target:
+            return
+            
+        # 创建上下文菜单
+        context_menu = QMenu()
+        context_menu.setStyleSheet(self.context_menu.styleSheet())
+        
+        # 添加基本菜单项
+        terminal_action = context_menu.addAction("Terminal")
+        csh_action = context_menu.addAction("csh")
+        log_action = context_menu.addAction("Log")
+        cmd_action = context_menu.addAction("cmd")
+        context_menu.addSeparator()
+        
+        # 检查是否存在 nlib 文件，如果存在则添加 Open nlib 菜单项
+        open_nlib_action = None
+        nlib_path = None
+        if target.startswith('I2'):
+            # 尝试两种可能的 nlib 文件名
+            nlib_name1 = target[2:] + '.nlib'  # 去掉 I2 的情况
+            nlib_name2 = target + '.nlib'      # 完整 target 名的情况
+            nlib_path1 = os.path.join(self.combo_sel, 'data', nlib_name1)
+            nlib_path2 = os.path.join(self.combo_sel, 'data', nlib_name2)
+            
+            if os.path.exists(nlib_path1):
+                nlib_path = nlib_path1
+            elif os.path.exists(nlib_path2):
+                nlib_path = nlib_path2
+                
+            if nlib_path:
+                open_nlib_action = context_menu.addAction("Open nlib")
+                context_menu.addSeparator()
+        
+        trace_up_action = context_menu.addAction("Trace Up")
+        trace_down_action = context_menu.addAction("Trace Down")
+        
+        def cleanup_menu():
+            self.context_menu_active = False
+        
+        context_menu.aboutToHide.connect(cleanup_menu)
+        
+        # 显示菜单
+        action = context_menu.exec_(view.viewport().mapToGlobal(position))
+        
+        # 处理菜单动作
+        if action == terminal_action:
+            self.Xterm()
+        elif action == csh_action:
+            self.bt_csh_for_model(index)
+        elif action == log_action:
+            self.bt_log_for_model(index)
+        elif action == cmd_action:
+            self.bt_cmd_for_model(index)
+        elif open_nlib_action and action == open_nlib_action:
+            try:
+                cmd = f"XMeta_icc2 {nlib_path}"
+                subprocess.Popen(cmd, shell=True)
+            except subprocess.SubprocessError as e:
+                print(f"Error opening nlib: {e}")
+        elif action == trace_up_action:
+            self.bt_trace_up_for_model(index)
+        elif action == trace_down_action:
+            self.bt_trace_down_for_model(index)
+
+    def bt_csh_for_model(self, index):
+        """为 Model 视图处理 csh 命令"""
+        if not index.isValid():
+            return
+            
+        target_index = self.model.index(index.row(), 1)
+        target = self.model.data(target_index)
+        if not target:
+            return
+            
+        shell_file = os.path.join(self.combo_sel, 'make_targets', f"{target}.csh")
+        if os.path.exists(shell_file):
+            try:
+                subprocess.run(['gvim', shell_file], check=True)
+            except subprocess.CalledProcessError:
+                pass
+    
+    def bt_log_for_model(self, index):
+        """为 Model 视图处理 log 命令"""
+        if not index.isValid():
+            return
+            
+        target_index = self.model.index(index.row(), 1)
+        target = self.model.data(target_index)
+        if not target:
+            return
+            
+        log_file = os.path.join(self.combo_sel, 'logs', f"{target}.log")
+        log_file_gz = f"{log_file}.gz"
+        
+        if os.path.exists(log_file):
+            try:
+                subprocess.run(['gvim', log_file], check=True)
+            except subprocess.CalledProcessError:
+                pass
+        elif os.path.exists(log_file_gz):
+            try:
+                subprocess.run(['gvim', log_file_gz], check=True)
+            except subprocess.CalledProcessError:
+                pass
+    
+    def bt_cmd_for_model(self, index):
+        """为 Model 视图处理 cmd 命令"""
+        if not index.isValid():
+            return
+            
+        target_index = self.model.index(index.row(), 1)
+        target = self.model.data(target_index)
+        if not target:
+            return
+            
+        cmd_file = os.path.join(self.combo_sel, 'cmds', f"{target}.cmd")
+        if os.path.exists(cmd_file):
+            try:
+                subprocess.run(['gvim', cmd_file], check=True)
+            except subprocess.CalledProcessError:
+                pass
+    
+    def bt_trace_up_for_model(self, index):
+        """为 Model 视图处理 Trace Up 命令"""
+        if not index.isValid():
+            return
+            
+        target_index = index.model().index(index.row(), 1)  # 1 是 target 列
+        self.tar_sel = index.model().data(target_index)
+        if self.tar_sel:
+            self.retrace_tab('in')
+    
+    def bt_trace_down_for_model(self, index):
+        """为 Model 视图处理 Trace Down 命令"""
+        if not index.isValid():
+            return
+            
+        target_index = index.model().index(index.row(), 1)  # 1 是 target 列
+        self.tar_sel = index.model().data(target_index)
+        if self.tar_sel:
+            self.retrace_tab('out')
+
+    def sync_item_status(self, target, new_status, start_time, end_time, tree_widget, tree_view):
+        """更新 TreeView 中指定 target 的状态"""
+        # 更新 TreeView
+        if tree_view and tree_view.model():
+            model = tree_view.model()
+            for row in range(model.rowCount()):
+                target_index = model.index(row, 1)
+                if model.data(target_index) == target:
+                    # 更新状态
+                    status_index = model.index(row, 2)
+                    model.setData(status_index, new_status)
+                    # 更新时间
+                    start_time_index = model.index(row, 3)
+                    end_time_index = model.index(row, 4)
+                    model.setData(start_time_index, start_time)
+                    model.setData(end_time_index, end_time)
+                    
+                    # 清除所有列的背景色
+                    for col in range(model.columnCount()):
+                        model.item(row, col).setBackground(QBrush())
+                    # 如果有新状态，设置新的背景色
+                    if new_status in self.colors:
+                        color = QColor(self.colors[new_status])
+                        for col in range(model.columnCount()):
+                            col_index = model.index(row, col)
+                            model.item(row, col).setBackground(QBrush(color))
+
+    def update_status_and_time(self, run_dir, tree_widget, tree_view):
+        """更新指定目录下所有 target 的状态和时间"""
+        if isinstance(tree_widget, QTreeWidget):
+            # TreeWidget 的更新逻辑
+            iterator = QTreeWidgetItemIterator(tree_widget)
+            while iterator.value():
+                item = iterator.value()
+                if item.text(1):  # 如果有target名称
+                    self.update_tree_widget_item(item, run_dir)
+                iterator.__iadd__(1)  # 使用 __iadd__ 替代 += 操作符
+        elif isinstance(tree_view, QtWidgets.QTreeView):
+            # TreeView 的更新逻辑
+            model = tree_view.model()
+            if model:
+                for row in range(model.rowCount()):
+                    self.update_tree_view_item(model, row, run_dir)
+
+    def update_tree_widget_item(self, item, run_dir):
+        """更新 TreeWidget 项目的状态"""
+        target = item.text(1)
+        target_file = os.path.join(run_dir, 'status', target)
+        new_status = self.get_target_status(target_file)
+        current_status = item.text(2)
+        
+        if new_status != current_status:
+            item.setText(2, new_status)
+            if new_status in self.colors:
+                color = QColor(self.colors[new_status])
+                for col in range(item.columnCount()):
+                    item.setBackground(col, QBrush(color))
+            
+            if new_status:
+                tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
+                start_time, end_time = self.get_start_end_time(tgt_track_file)
+                item.setText(3, start_time)
+                item.setText(4, end_time)
+
+    def update_tree_view_item(self, model, row, run_dir):
+        """更新 TreeView 项目的状态"""
+        target_index = model.index(row, 1)
+        target = model.data(target_index)
+        target_file = os.path.join(run_dir, 'status', target)
+        new_status = self.get_target_status(target_file)
+        status_index = model.index(row, 2)
+        current_status = model.data(status_index)
+        
+        if new_status != current_status:
+            model.setData(status_index, new_status)
+            if new_status in self.colors:
+                color = QColor(self.colors[new_status])
+                for col in range(model.columnCount()):
+                    model.item(row, col).setBackground(QBrush(color))
+            
+            if new_status:
+                tgt_track_file = os.path.join(run_dir, 'logs/targettracker', target)
+                start_time, end_time = self.get_start_end_time(tgt_track_file)
+                model.setData(model.index(row, 3), start_time)
+                model.setData(model.index(row, 4), end_time)
+
+    def copy_tar_from_model(self, index):
+        """处理双击事件，复制目标名称到剪贴板"""
+        if not index.isValid():
+            return
+        
+        # 获取目标名称（第2列）
+        target_index = self.model.index(index.row(), 1)
+        target = self.model.data(target_index)
+        
+        if target:
+            # 复制到剪贴板
+            clipboard = QApplication.clipboard()
+            clipboard.setText(target)
+
+    def search_in_code(self):
+        """在当前显示的代码中搜索"""
+        search_text = self.search_dialog.search_box.text()
+        if not search_text:
+            return
+
+        # 获取当前活动的标签页
+        current_tab = self.tabwidget.currentWidget()
+        if not current_tab:
+            return
+
+        # 获取当前标签页中的树视图
+        tree_view = None
+        if current_tab == self.tab_run:
+            tree_view = self.tree_view
         else:
-            return padded_status
+            # 在当前标签页中查找树视图
+            tree_views = current_tab.findChildren(QtWidgets.QTreeView)
+            if tree_views:
+                tree_view = tree_views[0]
+
+        if not tree_view or not tree_view.model():
+            return
+
+        # 清除之前的搜索结果
+        self.search_results = []
+        self.current_result = -1
+
+        # 在树视图中搜索
+        model = tree_view.model()
+        for row in range(model.rowCount()):
+            for col in range(model.columnCount()):
+                index = model.index(row, col)
+                text = str(model.data(index))
+                if search_text.lower() in text.lower():
+                    self.search_results.append(index)
+
+        # 更新搜索结果计数
+        total = len(self.search_results)
+        self.search_dialog.count_label.setText(f"0/{total}")
+
+        # 如果有结果，跳转到第一个
+        if self.search_results:
+            self.navigate_search_results(1)
+
+    def navigate_search_results(self, direction):
+        """在搜索结果中导航
+        direction: 1 表示下一个，-1 表示上一个
+        """
+        if not hasattr(self, 'search_results') or not self.search_results:
+            return
+
+        total = len(self.search_results)
+        if direction > 0:
+            self.current_result = (self.current_result + 1) % total
+        else:
+            self.current_result = (self.current_result - 1) % total
+
+        # 获取当前活动的标签页中的树视图
+        current_tab = self.tabwidget.currentWidget()
+        tree_view = None
+        if current_tab == self.tab_run:
+            tree_view = self.tree_view
+        else:
+            # 在当前标签页中查找树视图
+            tree_views = current_tab.findChildren(QtWidgets.QTreeView)
+            if tree_views:
+                tree_view = tree_views[0]
+
+        if not tree_view:
+            return
+
+        # 更新计数显示
+        self.search_dialog.count_label.setText(f"{self.current_result + 1}/{total}")
+
+        # 跳转到当前结果
+        current_index = self.search_results[self.current_result]
+        tree_view.setCurrentIndex(current_index)
+        tree_view.scrollTo(current_index)
+        
+        # 高亮显示当前结果
+        tree_view.setFocus()
+        tree_view.selectionModel().select(current_index, QtCore.QItemSelectionModel.ClearAndSelect)
 
     def eventFilter(self, obj, event):
-        """事件过滤器，处理鼠标点击事件"""
-        if obj == self.tree.viewport():
-            if event.type() == event.MouseButtonPress:
-                item = self.tree.itemAt(event.pos())
-                if item:
-                    # 获取点击的列
-                    column = self.tree.columnAt(event.x())
-                    # 只有在点击第一列时才触发折叠/展开
-                    if column == 0:
-                        level = item.text(0)
-                        if level in self.level_items:
-                            self.toggle_level_items(item, self.level_items)
-                            return True  # 事件已处理
+        """事件过滤器，处理 ESC 键"""
+        if obj == self.code_search and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self.hide_search_widget()
+                return True
         return super().eventFilter(obj, event)
+    
+    def toggle_search_widget(self):
+        """切换搜索框的显示/隐藏状态"""
+        if self.search_widget.isHidden():
+            self.search_widget.show()
+            self.code_search.setFocus()  # 显示时自动获取焦点
+            self.code_search.selectAll()  # 选中所有文本
+        else:
+            self.hide_search_widget()
+    
+    def hide_search_widget(self):
+        """隐藏搜索框"""
+        self.search_widget.hide()
+        # 将焦点返回给树视图
+        current_tab = self.tabwidget.currentWidget()
+        if current_tab == self.tab_run:
+            self.tree_view.setFocus()
+        else:
+            tree_views = current_tab.findChildren(QtWidgets.QTreeView)
+            if tree_views:
+                tree_views[0].setFocus()
 
-    def toggle_level_items(self, clicked_item, level_items):
-        """切换level对应的items的展开/折叠状态"""
-        level = clicked_item.text(0)
-        if level in level_items:
-            items = level_items[level]
-            if not items:
-                return
+    def toggle_search_dialog(self):
+        """切换搜索对话框的显示/隐藏状态"""
+        if self.search_dialog.isHidden():
+            self.search_dialog.show()
+            self.search_dialog.search_box.setFocus()
+            self.search_dialog.search_box.selectAll()
+        else:
+            self.search_dialog.hide()
 
-            # 切换展开状态
-            self.level_expanded[level] = not self.level_expanded[level]
-            
-            # 更新第一个item的展开状态
-            items[0].setExpanded(self.level_expanded[level])
-            
-            # 如果是展开状态，显示所有items
-            if self.level_expanded[level]:
-                for item in items:
-                    item.setHidden(False)
-            # 如果是折叠状态，只显示第一个item
-            else:
-                for i, item in enumerate(items):
-                    item.setHidden(i != 0)  # 只有第一个item不隐藏
-
-    def show_context_menu_for_tree(self, position, tree_widget, context_menu):
-        """为指定的树控件显示右键菜单"""
-        item = tree_widget.itemAt(position)
-        if item and item.childCount() == 0:  # 只在叶子节点上显示菜单
-            context_menu.exec_(tree_widget.viewport().mapToGlobal(position))
-
-class FilterTreeEventFilter(QObject):
-    def __init__(self, tree):
-        super().__init__()
-        self.tree = tree
-        self.level_items = {}
-        self.level_expanded = {}
-
+class SearchDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)  # 无边框窗口
+        
+        # 设置背景色和边框
+        self.setStyleSheet("""
+            QDialog {
+                background-color: white;
+                border: 1px solid #C0C0C0;
+                border-radius: 5px;
+            }
+        """)
+        
+        # 创建布局
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        # 搜索框
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search in code...")
+        self.search_box.setMinimumWidth(200)
+        
+        # 搜索结果计数标签
+        self.count_label = QLabel("0/0")
+        self.count_label.setFixedWidth(50)
+        
+        # 导航按钮
+        self.prev_button = QPushButton("↑")
+        self.next_button = QPushButton("↓")
+        self.prev_button.setFixedWidth(30)
+        self.next_button.setFixedWidth(30)
+        
+        # 添加到布局
+        layout.addWidget(self.search_box)
+        layout.addWidget(self.count_label)
+        layout.addWidget(self.prev_button)
+        layout.addWidget(self.next_button)
+        
+        # 安装事件过滤器处理ESC键
+        self.search_box.installEventFilter(self)
+        
+        # 创建定时器用于长按连续触发
+        self.repeat_timer = QTimer()
+        self.repeat_timer.setInterval(100)  # 设置重复间隔为100毫秒
+        self.repeat_timer.timeout.connect(self.handle_button_repeat)
+        
+        # 记录当前按下的按钮和方向
+        self.current_button = None
+        self.current_direction = 0
+        self.is_long_press = False  # 标记是否为长按
+        self.press_time = 0  # 记录按下时间
+        
+        # 为按钮添加事件过滤器
+        self.prev_button.installEventFilter(self)
+        self.next_button.installEventFilter(self)
+        
     def eventFilter(self, obj, event):
-        if obj == self.tree.viewport():
-            if event.type() == event.MouseButtonPress:
-                item = self.tree.itemAt(event.pos())
-                if item:
-                    # 获取点击的列
-                    column = self.tree.columnAt(event.x())
-                    # 只有在点击第一列时才触发折叠/展开
-                    if column == 0:
-                        level = item.text(0)
-                        if level in self.level_items:
-                            self.toggle_level_items(level)
-                            return True  # 事件已处理
+        if obj == self.search_box and event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self.hide()
+                return True
+        elif obj in (self.prev_button, self.next_button):
+            if event.type() == QtCore.QEvent.MouseButtonPress:
+                direction = -1 if obj == self.prev_button else 1
+                self.handle_button_press(obj, direction)
+                return True
+            elif event.type() == QtCore.QEvent.MouseButtonRelease:
+                self.handle_button_release()
+                return True
         return super().eventFilter(obj, event)
-
-    def toggle_level_items(self, level):
-        """切换level对应的items的展开/折叠状态"""
-        if level in self.level_items:
-            items = self.level_items[level]
-            if not items:
-                return
-
-            # 切换展开状态
-            self.level_expanded[level] = not self.level_expanded[level]
+        
+    def handle_button_press(self, button, direction):
+        """处理按钮按下事件"""
+        self.current_button = button
+        self.current_direction = direction
+        self.is_long_press = False
+        self.press_time = time.time()
+        
+        # 立即触发一次
+        if hasattr(self.parent(), 'navigate_search_results'):
+            self.parent().navigate_search_results(direction)
             
-            # 更新第一个item的展开状态
-            items[0].setExpanded(self.level_expanded[level])
+        # 启动定时器，延迟800毫秒后开始连续触发
+        QTimer.singleShot(800, self.start_repeat_timer)
+        
+    def handle_button_release(self):
+        """处理按钮释放事件"""
+        release_time = time.time()
+        # 如果不是长按且按下时间小于200毫秒，不触发额外的点击
+        if not self.is_long_press and (release_time - self.press_time) < 0.2:
+            pass
+        
+        self.repeat_timer.stop()
+        self.current_button = None
+        self.current_direction = 0
+        self.is_long_press = False
+        
+    def start_repeat_timer(self):
+        """开始连续触发定时器"""
+        if self.current_button and self.current_button.isDown():
+            self.is_long_press = True
+            self.repeat_timer.start()
             
-            # 如果是展开状态，显示所有items
-            if self.level_expanded[level]:
-                for item in items:
-                    item.setHidden(False)
-            # 如果是折叠状态，只显示第一个item
-            else:
-                for i, item in enumerate(items):
-                    item.setHidden(i != 0)  # 只有第一个item不隐藏
+    def handle_button_repeat(self):
+        """处理定时器触发的重复事件"""
+        if self.current_button and self.current_button.isDown() and self.is_long_press:
+            if hasattr(self.parent(), 'navigate_search_results'):
+                self.parent().navigate_search_results(self.current_direction)
+
+    def showEvent(self, event):
+        # 在父窗口中央显示
+        parent = self.parent()
+        if parent:
+            geometry = parent.geometry()
+            x = geometry.x() + (geometry.width() - self.width()) // 2
+            y = geometry.y() + 80  # 距离顶部80像素
+            self.move(x, y)
+        super().showEvent(event)
+
+class IndentDelegate(QtWidgets.QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        # 只对第一列（level列）特殊处理
+        if index.column() == 0:
+            # 保存原始的left位置
+            original_left = option.rect.left()
+            # 如果是子项，移除缩进
+            if index.parent().isValid():
+                # 直接使用parent()作为tree_view
+                indent = self.parent().indentation()
+                option.rect.setLeft(original_left - indent)
+        super().paint(painter, option, index)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
