@@ -40,6 +40,14 @@ class TreeViewEventFilter(QObject):
                                 self.tree_view.collapse(index)
                             else:
                                 self.tree_view.expand(index)
+                                
+                            # 保存展开状态到父窗口的字典中
+                            level = item.text()
+                            run_dir = self.parent.combo_sel  # 修改这里使用combo_sel而不是combo_sel_dir
+                            if run_dir not in self.parent.level_expanded:
+                                self.parent.level_expanded[run_dir] = {}
+                            self.parent.level_expanded[run_dir][level] = not is_expanded
+                            
                             return True
         return super().eventFilter(obj, event)
 
@@ -337,7 +345,7 @@ class MonitorRuns(QMainWindow):
         main_layout.addWidget(self.tabwidget)
 
         # 初始化run_dir
-        self.combo_sel_dir = os.path.join(self.gen_combo.cur_dir, self.gen_combo.combobox.currentText())
+        self.combo_sel = os.path.join(self.gen_combo.cur_dir, self.gen_combo.combobox.currentText())
 
         # 主Tab
         self.tab_run = QWidget()
@@ -408,7 +416,7 @@ class MonitorRuns(QMainWindow):
         self.tar_name = []
         self.countX = 0
 
-        self.init_run_view(self.combo_sel_dir)
+        self.init_run_view(self.combo_sel)
 
         # 窗口大小与位置初始化
         self.resize(1200,800)
@@ -457,6 +465,20 @@ class MonitorRuns(QMainWindow):
             self.model.removeRows(0, self.model.rowCount())  # 使用 model 的方法清除数据
         
         self.get_tree(self.combo_sel)  # 重新加载新 run 的数据
+        
+        # 恢复展开状态
+        if self.combo_sel in self.level_expanded:
+            for level, is_expanded in self.level_expanded[self.combo_sel].items():
+                # 查找对应的level项
+                for row in range(self.model.rowCount()):
+                    item = self.model.item(row, 0)
+                    if item and item.text() == level:
+                        index = self.model.indexFromItem(item)
+                        if is_expanded:
+                            self.tree_view.expand(index)
+                        else:
+                            self.tree_view.collapse(index)
+                        break
 
     def change_run(self):
         """定时刷新所有树状态"""
@@ -590,19 +612,30 @@ class MonitorRuns(QMainWindow):
             
         # 获取选中行的target列(第2列)的值
         targets = []
-        seen_rows = set()  # 用于跟踪已处理的行
+        seen_indexes = set()  # 用于跟踪已处理的索引
         
         for index in selected_indexes:
-            row = index.row()
-            if row in seen_rows:
+            # 只处理target列
+            if index.column() != 1:  # 1 是 target 列
                 continue
                 
-            # 获取target列的值
-            target_index = self.model.index(row, 1)  # 1是target列的索引
+            # 创建一个唯一标识符来跟踪已处理的索引
+            index_key = (index.row(), index.parent().row() if index.parent().isValid() else -1)
+            if index_key in seen_indexes:
+                continue
+                
+            # 获取target列的值，考虑父子关系
+            if index.parent().isValid():
+                # 如果是子项，使用父索引来获取正确的target
+                target_index = self.model.index(index.row(), 1, index.parent())
+            else:
+                # 如果是父项，直接使用当前行
+                target_index = self.model.index(index.row(), 1)
+                
             target = self.model.data(target_index)
             if target:
                 targets.append(target)
-            seen_rows.add(row)
+            seen_indexes.add(index_key)
             
         return targets
 
@@ -613,6 +646,10 @@ class MonitorRuns(QMainWindow):
         if not selected_targets:
             return
             
+        print("\n=== Before Action ===")
+        print(f"Action: {action}")
+        print(f"Current level_expanded: {self.level_expanded}")
+        
         # 构建命令，只执行基本命令
         cmd = f"cd {self.combo_sel} && {action} "
         cmd += " ".join(selected_targets)
@@ -623,8 +660,27 @@ class MonitorRuns(QMainWindow):
         
         # 如果是unskip动作或skip动作,刷新TreeView
         if action in ['XMeta_unskip', 'XMeta_skip']:
+            print("\n=== Before Tree Refresh ===")
+            if self.tree_view and self.tree_view.model():
+                for row in range(self.tree_view.model().rowCount()):
+                    index = self.tree_view.model().index(row, 0)
+                    if self.tree_view.model().hasChildren(index):
+                        level = self.tree_view.model().data(index)
+                        is_expanded = self.tree_view.isExpanded(index)
+                        print(f"Level: {level}, Expanded: {is_expanded}")
+            
             # 重新获取数据并刷新视图
             self.get_tree(self.combo_sel)
+            
+            print("\n=== After Tree Refresh ===")
+            if self.tree_view and self.tree_view.model():
+                for row in range(self.tree_view.model().rowCount()):
+                    index = self.tree_view.model().index(row, 0)
+                    if self.tree_view.model().hasChildren(index):
+                        level = self.tree_view.model().data(index)
+                        is_expanded = self.tree_view.isExpanded(index)
+                        print(f"Level: {level}, Expanded: {is_expanded}")
+            print("===================\n")
 
     def Xterm(self):
         os.chdir(self.combo_sel)
@@ -642,8 +698,31 @@ class MonitorRuns(QMainWindow):
             # 处理 TreeView 的选中项
             selection_model = selected_tree.selectionModel()
             if selection_model:
-                selected_indexes = selection_model.selectedRows(1)  # 1 是 target 列
-                select_run_targets = [selected_tree.model().data(index) for index in selected_indexes if selected_tree.model().data(index)]
+                selected_indexes = selection_model.selectedIndexes()
+                processed_indices = set()  # 用于跟踪已处理的索引
+                
+                for index in selected_indexes:
+                    if index.column() != 1:  # 只处理 target 列
+                        continue
+                        
+                    # 创建唯一标识符
+                    identifier = f"{index.row()}-{index.parent().row() if index.parent().isValid() else 'root'}"
+                    if identifier in processed_indices:
+                        continue
+                    processed_indices.add(identifier)
+                    
+                    # 获取target数据
+                    model = selected_tree.model()
+                    if index.parent().isValid():
+                        # 如果是子项，从子项获取数据
+                        target = model.data(index)
+                    else:
+                        # 如果是父项，从当前行获取数据
+                        target = model.data(model.index(index.row(), 1))
+                        
+                    if target:
+                        select_run_targets.append(target)
+                        
         elif isinstance(selected_tree, QTreeWidget):
             # 处理 TreeWidget 的选中项
             selected = selected_tree.selectedItems()
@@ -678,12 +757,30 @@ class MonitorRuns(QMainWindow):
                     tgt_track_file = os.path.join(self.combo_sel, 'logs/targettracker', target)
                     start_time, end_time = self.get_start_end_time(tgt_track_file)
                     self.sync_item_status(target, new_status, start_time, end_time, selected_tree, tree_view)
-        
-        # 清除选择
-        if isinstance(selected_tree, QtWidgets.QTreeView):
-            selected_tree.clearSelection()
-        elif isinstance(selected_tree, QTreeWidget):
-            selected_tree.clearSelection()
+            
+            # 保存展开状态
+            if isinstance(selected_tree, QtWidgets.QTreeView):
+                model = selected_tree.model()
+                expanded_indices = []
+                if model:
+                    def save_expanded_state(parent=QtCore.QModelIndex()):
+                        for row in range(model.rowCount(parent)):
+                            index = model.index(row, 0, parent)
+                            if model.hasChildren(index) and selected_tree.isExpanded(index):
+                                expanded_indices.append(index)
+                            if model.hasChildren(index):
+                                save_expanded_state(index)
+                    save_expanded_state()
+                
+                # 清除选择
+                selected_tree.clearSelection()
+                
+                # 恢复展开状态
+                for index in expanded_indices:
+                    selected_tree.expand(index)
+                    
+            elif isinstance(selected_tree, QTreeWidget):
+                selected_tree.clearSelection()
 
     def bt_notar(self, status):
         os.chdir(self.combo_sel)
@@ -991,7 +1088,30 @@ class MonitorRuns(QMainWindow):
         return n
 
     def get_tree(self, run_dir):
-        self.combo_sel = run_dir
+        """获取并构建树形视图"""
+        print("\n=== get_tree start ===")
+        print(f"Current level_expanded dict: {self.level_expanded}")
+        print(f"Current run_dir: {run_dir}")
+        
+        # 使用已保存的展开状态
+        if run_dir in self.level_expanded:
+            expanded_states = self.level_expanded[run_dir]
+        else:
+            expanded_states = {}
+        
+        # 原有的树构建代码...
+        
+        # 在构建完树后恢复展开状态
+        if self.tree_view and self.tree_view.model():
+            for row in range(self.tree_view.model().rowCount()):
+                index = self.tree_view.model().index(row, 0)
+                if self.tree_view.model().hasChildren(index):
+                    level = self.tree_view.model().data(index)
+                    if level in expanded_states:
+                        print(f"Restoring state for level {level}: {expanded_states[level]}")
+                        self.tree_view.setExpanded(index, expanded_states[level])
+        
+        print("=== get_tree end ===\n")
         
         # 清空模型
         self.model.clear()
@@ -1126,6 +1246,29 @@ class MonitorRuns(QMainWindow):
         self.tree_view.setColumnWidth(2, 80)  # status列
         self.tree_view.setColumnWidth(3, 200)  # start time列
         self.tree_view.setColumnWidth(4, 200)  # end time列
+
+        # 根据子项数量自动展开/折叠level
+        if run_dir not in self.level_expanded:  # 只在没有保存的状态时应用自动展开规则
+            self.level_expanded[run_dir] = {}
+            for level, items in level_data.items():
+                # 获取子项数量（减去父项）
+                child_count = len(items) - 1
+                # 如果子项数量小于等于3，则展开
+                should_expand = child_count <= 3
+                
+                # 保存展开状态
+                self.level_expanded[run_dir][level] = should_expand
+                
+                # 查找并展开/折叠对应的level项
+                for row in range(self.model.rowCount()):
+                    item = self.model.item(row, 0)
+                    if item and item.text() == level:
+                        index = self.model.indexFromItem(item)
+                        if should_expand:
+                            self.tree_view.expand(index)
+                        else:
+                            self.tree_view.collapse(index)
+                        break
 
     def set_item_color(self, item, status):
         if status in self.colors:
@@ -1639,14 +1782,32 @@ class MonitorRuns(QMainWindow):
         if not index.isValid():
             return
             
-        target_index = self.model.index(index.row(), 1)
-        target = self.model.data(target_index)
+        # 获取当前选中项的model
+        model = index.model()
+        if not model:
+            return
+            
+        # 获取target列的数据
+        if index.parent().isValid():
+            # 如果是子项，直接从子项的target列获取数据
+            target_index = model.index(index.row(), 1, index.parent())
+        else:
+            # 如果是父项，从当前行获取数据
+            target_index = model.index(index.row(), 1)
+            
+        target = model.data(target_index)
         if not target:
             return
             
         log_file = os.path.join(self.combo_sel, 'logs', f"{target}.log")
         log_file_gz = f"{log_file}.gz"
         
+        # 检查文件是否存在
+        if not os.path.exists(log_file) and not os.path.exists(log_file_gz):
+            print(f"Log file not found: {log_file}")
+            return
+            
+        # 打开存在的文件
         if os.path.exists(log_file):
             try:
                 subprocess.run(['gvim', log_file], check=True)
@@ -1700,27 +1861,44 @@ class MonitorRuns(QMainWindow):
         # 更新 TreeView
         if tree_view and tree_view.model():
             model = tree_view.model()
-            for row in range(model.rowCount()):
-                target_index = model.index(row, 1)
-                if model.data(target_index) == target:
-                    # 更新状态
-                    status_index = model.index(row, 2)
-                    model.setData(status_index, new_status)
-                    # 更新时间
-                    start_time_index = model.index(row, 3)
-                    end_time_index = model.index(row, 4)
-                    model.setData(start_time_index, start_time)
-                    model.setData(end_time_index, end_time)
+            
+            def update_item(parent_index=QtCore.QModelIndex()):
+                for row in range(model.rowCount(parent_index)):
+                    target_index = model.index(row, 1, parent_index)
+                    current_target = model.data(target_index)
                     
-                    # 清除所有列的背景色
-                    for col in range(model.columnCount()):
-                        model.item(row, col).setBackground(QBrush())
-                    # 如果有新状态，设置新的背景色
-                    if new_status in self.colors:
-                        color = QColor(self.colors[new_status])
-                        for col in range(model.columnCount()):
-                            col_index = model.index(row, col)
-                            model.item(row, col).setBackground(QBrush(color))
+                    if current_target == target:
+                        # 更新状态
+                        status_index = model.index(row, 2, parent_index)
+                        model.setData(status_index, new_status)
+                        # 更新时间
+                        start_time_index = model.index(row, 3, parent_index)
+                        end_time_index = model.index(row, 4, parent_index)
+                        model.setData(start_time_index, start_time)
+                        model.setData(end_time_index, end_time)
+                        
+                        # 获取当前行的所有列的item
+                        items = [model.itemFromIndex(model.index(row, col, parent_index)) 
+                               for col in range(model.columnCount())]
+                        
+                        # 清除所有列的背景色
+                        for item in items:
+                            if item:  # 确保item存在
+                                item.setBackground(QBrush())
+                                
+                        # 如果有新状态，设置新的背景色
+                        if new_status in self.colors:
+                            color = QColor(self.colors[new_status])
+                            for item in items:
+                                if item:  # 确保item存在
+                                    item.setBackground(QBrush(color))
+                    
+                    # 如果当前项有子项，递归处理
+                    if model.hasChildren(target_index):
+                        update_item(target_index)
+            
+            # 从根节点开始更新
+            update_item()
 
     def update_status_and_time(self, run_dir, tree_widget, tree_view):
         """更新指定目录下所有 target 的状态和时间"""
